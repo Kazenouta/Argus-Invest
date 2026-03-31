@@ -3,7 +3,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { portfolioApi, tradesApi, thinkingApi, weaknessApi, rulesApi } from '@/api'
+import { portfolioApi, tradesApi, thinkingApi } from '@/api'
 import type { PortfolioRecord, PortfolioSnapshot, TradeRecord, ThinkingRecord } from '@/types'
 
 export const usePortfolioStore = defineStore('portfolio', () => {
