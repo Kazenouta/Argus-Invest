@@ -209,19 +209,19 @@ def upload_trades_xlsx(
         records.sort(key=lambda r: (r.date, r.ticker, r.action))
 
         # ── 按日期分组：同日期覆盖，不同日期追加 ─────────────────
-        # 收集所有记录的日期
         uploaded_dates = set(r.date for r in records)
-        # 先删除所有已存在且本次上传中出现的日期的旧记录
         existing_df = DataStorage.read_trades()
         dates_to_replace = [d for d in uploaded_dates if d in existing_df["date"].values]
         if dates_to_replace:
             existing_df = existing_df[~existing_df["date"].isin(dates_to_replace)]
-            # 重新构建完整 df（只保留不在替换日期的旧记录）
-            merged_df = existing_df
-        else:
-            merged_df = existing_df
 
-        # 追加新记录
+        # 生成新记录的 ID（取现有最大 ID + 1，递进分配）
+        max_id = int(existing_df["id"].max()) if not existing_df.empty and "id" in existing_df.columns and existing_df["id"].notna().any() else 0
+        for i, rec in enumerate(records):
+            rec.id = max_id + i + 1
+            rec.updated_at = datetime.now()
+
+        merged_df = existing_df if not existing_df.empty else pd.DataFrame()
         new_records_df = pd.DataFrame([r.model_dump() for r in records])
         final_df = pd.concat([merged_df, new_records_df], ignore_index=True) if not merged_df.empty else new_records_df
         final_df.to_parquet(DataStorage.trades_path(), index=False)
