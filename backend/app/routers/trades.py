@@ -119,22 +119,20 @@ def upload_trades_xlsx(
                 return "sell"
             return None
 
-        records: list[TradeRecord] = []
-        seen_keys: set[str] = set()
+        # ── 先收集所有有效成交，再按 (date, ticker, action) 合并 ───
+        raw_records: list[dict] = []
 
         for row in data_rows:
             if not row or len(row) < 5:
                 continue
             cells = list(row)
 
-            # 清理证券代码
             raw_code = str(cells[ci_code]).replace("\t", "").replace(" ", "").strip()
             if not raw_code or raw_code in ("", "None"):
                 continue
 
             code6 = raw_code.zfill(6) if raw_code.isdigit() else raw_code
             account = str(cells[ci_account]).replace("\t", "").strip() if ci_account >= 0 and ci_account < len(cells) else ""
-            # 判断市场前缀
             if "深" in account or "SZ" in account.upper():
                 ticker = "SZ" + code6
             elif "沪" in account or "SH" in account.upper():
@@ -143,13 +141,6 @@ def upload_trades_xlsx(
                 ticker = "HK" + code6
             else:
                 ticker = code6
-
-            # 去重（同流水号跳过）
-            serial = str(cells[ci_serial]).replace("\t", "").strip() if ci_serial >= 0 and ci_serial < len(cells) else ""
-            key = f"{serial}_{ticker}"
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
 
             # 成交状态：撤单跳过
             status = str(cells[ci_status]).strip() if ci_status >= 0 and ci_status < len(cells) else ""
@@ -162,7 +153,6 @@ def upload_trades_xlsx(
             if action is None:
                 continue
 
-            # 数量/价格/金额
             qty = int(parse_num(cells[ci_qty] if ci_qty < len(cells) else None))
             price = parse_num(cells[ci_price] if ci_price < len(cells) else None)
             amount = parse_num(cells[ci_amount] if ci_amount < len(cells) else None, default=qty * price)
@@ -182,20 +172,41 @@ def upload_trades_xlsx(
 
             name = str(cells[ci_name]).strip() if ci_name >= 0 and ci_name < len(cells) else ""
 
+            raw_records.append({
+                "date": trade_date, "ticker": ticker, "name": name,
+                "action": action, "quantity": qty,
+                "price": price, "amount": amount,
+            })
+
+        if not raw_records:
+            raise HTTPException(status_code=400, detail="未解析出有效成交记录（可能全为撤单）")
+
+        # ── 按 (date, ticker, action) 合并：数量/金额累加，加权平均价格 ─
+        merged: dict[tuple, dict] = {}
+        for r in raw_records:
+            key = (r["date"], r["ticker"], r["action"])
+            if key not in merged:
+                merged[key] = {**r}
+            else:
+                m = merged[key]
+                # 加权平均价格
+                total_amount = m["amount"] + r["amount"]
+                total_qty    = m["quantity"] + r["quantity"]
+                m["price"]   = round(total_amount / total_qty, 3) if total_qty > 0 else 0
+                m["quantity"] = total_qty
+                m["amount"]  = round(total_amount, 2)
+
+        records: list[TradeRecord] = []
+        for key, r in merged.items():
             records.append(TradeRecord(
-                date=trade_date,
-                ticker=ticker,
-                name=name,
-                action=action,
-                quantity=qty,
-                price=round(price, 3),
-                amount=round(amount, 2),
-                reason="",
-                created_at=datetime.now(),
+                date=r["date"], ticker=r["ticker"], name=r["name"],
+                action=r["action"], quantity=r["quantity"],
+                price=r["price"], amount=r["amount"],
+                reason="", created_at=datetime.now(),
             ))
 
-        if not records:
-            raise HTTPException(status_code=400, detail="未解析出有效成交记录（可能全为撤单）")
+        # 按日期+标的排序
+        records.sort(key=lambda r: (r.date, r.ticker, r.action))
 
         # 批量追加到存储
         for rec in records:
@@ -206,7 +217,7 @@ def upload_trades_xlsx(
             "count": len(records),
             "preview": [
                 {"ticker": r.ticker, "name": r.name, "action": r.action,
-                 "qty": r.quantity, "price": r.price, "date": str(r.date)}
+                 "qty": r.quantity, "price": r.price, "amount": r.amount, "date": str(r.date)}
                 for r in records[:5]
             ],
         }
