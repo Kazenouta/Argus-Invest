@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from fastapi.responses import JSONResponse
 import pandas as pd
 import openpyxl
+from zipfile import BadZipFile  # openpyxl uses zipfile.BadZipFile internally
 
 from app.models.portfolio import PortfolioRecord, PortfolioSnapshot
 from app.services.data_storage import DataStorage
@@ -155,7 +156,7 @@ def upload_portfolio_xlsx(
 
         return {"status": "ok", "date": date_str, "count": len(records), "records": records[:3]}
 
-    except openpyxl.BadZipFile:
+    except BadZipFile:
         raise HTTPException(status_code=400, detail="文件格式错误，请上传有效的 .xlsx 文件")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解析失败: {str(e)}")
