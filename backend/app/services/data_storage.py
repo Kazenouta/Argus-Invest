@@ -112,8 +112,16 @@ class DataStorage:
 
     @classmethod
     def write_portfolio(cls, df: pd.DataFrame) -> None:
-        """写入持仓数据（覆盖）"""
-        cls.write_parquet(cls.portfolio_path(), df)
+        """写入持仓数据（追加：同日期覆盖，不同日期追加）"""
+        path = cls.portfolio_path()
+        existing = cls.read_parquet(path)
+        if existing.empty:
+            combined = df
+        else:
+            # 删除旧日期的记录，追加新记录（同日期覆盖）
+            existing = existing[existing["date"] != df["date"].iloc[0]]
+            combined = pd.concat([existing, df], ignore_index=True)
+        df.to_parquet(path, index=False)
 
     # ── Trades ───────────────────────────────────────────────────────────
 

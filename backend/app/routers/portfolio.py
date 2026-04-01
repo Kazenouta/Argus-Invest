@@ -205,7 +205,7 @@ def upload_portfolio_xlsx(
         if not records:
             raise HTTPException(status_code=400, detail="未能从文件中解析出有效持仓记录，请检查文件内容")
 
-        # ── 4. 写入存储（覆盖）────────────────────────────────
+        # ── 4. 写入存储（追加：同日期覆盖，不同日期追加）──────────
         df = pd.DataFrame([r.model_dump() for r in records])
         df["date"] = pd.to_datetime(df["date"]).dt.date
         DataStorage.write_portfolio(df)
