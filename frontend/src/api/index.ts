@@ -31,6 +31,9 @@ export const tradesApi = {
   add: (trade: unknown) =>
     api.post('/trades/', trade),
 
+  update: (tradeId: number, trade: unknown) =>
+    api.put(`/trades/${tradeId}`, trade),
+
   delete: (tradeId: number) =>
     api.delete(`/trades/${tradeId}`),
 }

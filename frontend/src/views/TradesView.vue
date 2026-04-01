@@ -109,9 +109,30 @@
         <el-table-column prop="amount"  label="金额"    width="110" align="right">
           <template #default="{ row }">{{ fmtMoney(row.amount) }}</template>
         </el-table-column>
-        <el-table-column prop="reason"  label="逻辑"    min-width="180">
+        <el-table-column prop="reason"  label="逻辑"    min-width="220">
           <template #default="{ row }">
-            <span class="reason-text" :title="row.reason">{{ row.reason || '—' }}</span>
+            <!-- 非编辑状态 -->
+            <div v-if="editingId !== row.id" class="reason-cell" @click="startEdit(row)">
+              <span class="reason-text" :title="row.reason">{{ row.reason || '点击填写逻辑...' }}</span>
+              <el-icon class="edit-icon"><Edit /></el-icon>
+            </div>
+            <!-- 编辑状态 -->
+            <div v-else class="reason-edit">
+              <el-input
+                v-model="editReason"
+                type="textarea"
+                :rows="2"
+                :autosize="{ minRows: 1, maxRows: 3 }"
+                size="small"
+                placeholder="描述操作理由和判断依据..."
+                @keyup.enter.ctrl="saveEdit(row)"
+                @keyup.escape="cancelEdit"
+              />
+              <div class="edit-actions">
+                <el-button type="primary" size="small" @click="saveEdit(row)">保存</el-button>
+                <el-button size="small" @click="cancelEdit">取消</el-button>
+              </div>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="70" align="center">
@@ -134,10 +155,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Upload, Loading } from '@element-plus/icons-vue'
+import { Upload, Loading, Edit } from '@element-plus/icons-vue'
 import axios from 'axios'
 import { tradesApi } from '@/api'
 import type { TradeRecord } from '@/types'
+
+const editingId = ref<number | null>(null)
+const editReason = ref('')
+const originalReason = ref('')
 
 const trades       = ref<TradeRecord[]>([])
 const tableLoading = ref(false)
@@ -174,6 +199,34 @@ function actionTag(a?: string) {
 function fmtMoney(v?: number | null) {
   if (v == null) return '—'
   return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function startEdit(row: TradeRecord) {
+  editingId.value = row.id!
+  editReason.value = row.reason || ''
+  originalReason.value = row.reason || ''
+}
+
+async function saveEdit(row: TradeRecord) {
+  if (editReason.value.trim() === (originalReason.value.trim())) {
+    cancelEdit()
+    return
+  }
+  try {
+    const updated = { ...row, reason: editReason.value.trim() }
+    await tradesApi.update(row.id!, updated)
+    row.reason = editReason.value.trim()
+    ElMessage.success('逻辑已保存')
+  } catch {
+    ElMessage.error('保存失败')
+  }
+  cancelEdit()
+}
+
+function cancelEdit() {
+  editingId.value = null
+  editReason.value = ''
+  originalReason.value = ''
 }
 
 function onFileChange(file: { name: string; raw?: File }) {
@@ -260,5 +313,32 @@ onMounted(loadTrades)
   text-overflow: ellipsis;
   white-space: nowrap;
   display: block;
+}
+
+.reason-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  &:hover .edit-icon { opacity: 1; }
+  .reason-text {
+    flex: 1;
+    color: #909399;
+    font-style: italic;
+  }
+  .edit-icon {
+    opacity: 0;
+    color: #409eff;
+    transition: opacity 0.2s;
+    font-size: 12px;
+  }
+}
+
+.reason-edit {
+  .edit-actions {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+  }
 }
 </style>

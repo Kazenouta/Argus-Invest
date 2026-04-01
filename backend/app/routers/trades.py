@@ -247,12 +247,29 @@ def upload_trades_xlsx(
 
 @router.delete("/{trade_id}")
 def delete_trade(trade_id: int):
-    """删除指定调仓记录（软删除，改用 enabled 字段）"""
+    """删除指定调仓记录"""
     df = DataStorage.read_trades()
     if df.empty:
         raise HTTPException(status_code=404, detail="调仓记录不存在")
     if "id" not in df.columns or trade_id not in df["id"].values:
         raise HTTPException(status_code=404, detail="调仓记录不存在")
     df = df[df["id"] != trade_id]
-    DataStorage.write_parquet(DataStorage.trades_path(), df)
+    df.to_parquet(DataStorage.trades_path(), index=False)
     return {"status": "ok"}
+
+
+@router.put("/{trade_id}")
+def update_trade(trade_id: int, trade: TradeRecord):
+    """更新指定调仓记录（目前主要用于修改 reason 逻辑字段）"""
+    df = DataStorage.read_trades()
+    if df.empty or "id" not in df.columns or trade_id not in df["id"].values:
+        raise HTTPException(status_code=404, detail="调仓记录不存在")
+    idx = df[df["id"] == trade_id].index
+    if idx.empty:
+        raise HTTPException(status_code=404, detail="调仓记录不存在")
+    record = trade.model_dump()
+    for col, val in record.items():
+        if col not in ("id",):
+            df.loc[idx[0], col] = val
+    df.to_parquet(DataStorage.trades_path(), index=False)
+    return {"status": "ok", "id": trade_id}
