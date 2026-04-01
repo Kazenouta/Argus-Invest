@@ -152,6 +152,17 @@ class DataStorage:
         cls.append_parquet(cls.trades_path(), new_df)
         return int(new_id)
 
+    @classmethod
+    def replace_trades_by_date(cls, records: list[dict], trade_date) -> None:
+        """替换指定日期的全部调仓记录（先删后写）"""
+        path = cls.trades_path()
+        df = cls.read_trades()
+        if not df.empty:
+            df = df[df["date"] != trade_date]
+        new_df = pd.DataFrame(records)
+        combined = pd.concat([df, new_df], ignore_index=True) if not df.empty else new_df
+        combined.to_parquet(path, index=False)
+
     # ── Weakness ────────────────────────────────────────────────────────
 
     @classmethod
