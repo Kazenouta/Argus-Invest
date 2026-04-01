@@ -26,14 +26,7 @@
               <span>持仓管理</span>
             </template>
             <el-menu-item index="/portfolio">持仓看板</el-menu-item>
-          </el-sub-menu>
-
-          <el-sub-menu index="/trades">
-            <template #title>
-              <el-icon><Swap /></el-icon>
-              <span>调仓记录</span>
-            </template>
-            <el-menu-item index="/trades">调仓列表</el-menu-item>
+            <el-menu-item index="/trades">调仓记录</el-menu-item>
           </el-sub-menu>
 
           <el-menu-item index="/thinking">

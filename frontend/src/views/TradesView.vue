@@ -4,171 +4,255 @@
       <template #header>
         <div class="card-header">
           <span>调仓记录</span>
-          <el-button type="primary" size="small" @click="showForm = !showForm">
-            <el-icon><Plus /></el-icon>
-            {{ showForm ? '取消' : '新增调仓' }}
-          </el-button>
+          <div class="header-actions">
+            <!-- 日期筛选 -->
+            <el-date-picker
+              v-model="queryRange"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              size="small"
+              style="width: 240px; margin-right: 8px"
+              @change="loadTrades"
+            />
+            <!-- 按股票筛选 -->
+            <el-select
+              v-model="queryTicker"
+              placeholder="全部股票"
+              clearable
+              filterable
+              size="small"
+              style="width: 130px; margin-right: 8px"
+              @change="loadTrades"
+            >
+              <el-option
+                v-for="t in tickerOptions"
+                :key="t.ticker"
+                :label="`${t.ticker} ${t.name}`"
+                :value="t.ticker"
+              />
+            </el-select>
+            <el-button type="primary" size="small" @click="showUpload = !showUpload">
+              <el-icon><Upload /></el-icon>
+              {{ showUpload ? '取消上传' : '上传调仓' }}
+            </el-button>
+          </div>
         </div>
       </template>
 
-      <!-- 新增表单 -->
-      <div v-if="showForm" class="form-card">
-        <el-form :model="form" label-width="90px" size="small">
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-form-item label="交易日期">
-                <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" style="width:100%" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="股票代码">
-                <el-input v-model="form.ticker" placeholder="如 SZ000001" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="股票名称">
-                <el-input v-model="form.name" placeholder="如 平安银行" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="操作类型">
-                <el-select v-model="form.action" style="width:100%">
-                  <el-option label="买入" value="buy" />
-                  <el-option label="卖出" value="sell" />
-                  <el-option label="调仓" value="adjust" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="成交数量">
-                <el-input-number v-model="form.quantity" :min="0" style="width:100%" @change="calcAmount" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="成交价格">
-                <el-input-number v-model="form.price" :min="0" :precision="2" style="width:100%" @change="calcAmount" />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-form-item label="调仓逻辑">
-            <el-input v-model="form.reason" type="textarea" :rows="2" placeholder="必填：描述操作理由和判断依据" />
+      <!-- ── 上传面板 ─────────────────────────────────────── -->
+      <div v-if="showUpload" class="upload-panel">
+        <el-alert type="info" :closable="false" style="margin-bottom: 14px">
+          <template #title>上传说明：从券商导出的「当日成交」Excel 文件，系统自动解析并批量追加调仓记录。</template>
+          <ul style="margin: 6px 0 0 0; font-size: 12px; line-height: 1.9; color: #666">
+            <li>支持同花顺/东方财富等券商导出的成交文件（表头含「流水号/证券代码/方向/成交数量/成交价格/成交时间」）</li>
+            <li><b>证券买入</b> → 买入记录，<b>证券卖出/增强限价卖出</b> → 卖出记录</li>
+            <li>撤单记录自动跳过（金额为 0 的成交不入库）</li>
+            <li>上传后自动刷新列表，支持多次上传追加</li>
+          </ul>
+        </el-alert>
+
+        <el-form label-width="80px" size="default">
+          <el-form-item label="选择文件">
+            <el-upload
+              ref="uploadRef"
+              :auto-upload="false"
+              :limit="1"
+              accept=".xlsx,.xls"
+              :on-change="onFileChange"
+              :on-remove="onFileRemove"
+              :file-list="fileList"
+              style="width: 100%"
+            >
+              <el-button type="primary" plain>
+                <el-icon><Upload /></el-icon>&nbsp;选择当日成交 Excel
+              </el-button>
+              <template #tip>
+                <div style="font-size: 12px; color: #aaa; margin-top: 4px">
+                  支持 .xlsx / .xls 文件，解析失败时会提示具体原因
+                </div>
+              </template>
+            </el-upload>
           </el-form-item>
-          <el-form-item>
-            <el-button type="primary" @click="submit">保存</el-button>
+
+          <el-form-item v-if="fileList.length > 0">
+            <el-button type="primary" :loading="uploading" :disabled="uploading" @click="submitUpload">
+              确认上传
+            </el-button>
+            <el-button @click="resetUpload">重置</el-button>
           </el-form-item>
         </el-form>
       </div>
 
-      <!-- 列表 -->
-      <el-table :data="trades" stripe size="small">
-        <el-table-column prop="date" label="日期" width="110" />
-        <el-table-column prop="ticker" label="代码" width="110" />
-        <el-table-column prop="name" label="名称" width="100" />
-        <el-table-column prop="action" label="操作" width="80" align="center">
+      <!-- ── 调仓记录列表 ────────────────────────────────── -->
+      <el-table
+        v-if="!tableLoading && trades.length > 0"
+        :data="trades"
+        stripe
+        size="small"
+        style="margin-top: 12px"
+      >
+        <el-table-column prop="date"     label="日期"     width="110" />
+        <el-table-column prop="ticker"  label="代码"     width="110" />
+        <el-table-column prop="name"    label="名称"     width="120" />
+        <el-table-column prop="action"  label="方向"     width="75"  align="center">
           <template #default="{ row }">
-            <el-tag :type="actionTagType(row.action)" size="small">{{ actionLabel(row.action) }}</el-tag>
+            <el-tag :type="actionTag(row.action)" size="small">{{ actionLabel(row.action) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="quantity" label="数量" width="90" align="right" />
-        <el-table-column prop="price" label="价格" width="90" align="right">
-          <template #default="{ row }">{{ row.price.toFixed(2) }}</template>
+        <el-table-column prop="quantity" label="数量"   width="90"  align="right" />
+        <el-table-column prop="price"    label="价格"    width="90"  align="right">
+          <template #default="{ row }">{{ row.price?.toFixed(3) }}</template>
         </el-table-column>
-        <el-table-column prop="amount" label="金额" width="110" align="right">
-          <template #default="{ row }">{{ row.amount.toFixed(2) }}</template>
+        <el-table-column prop="amount"  label="金额"    width="110" align="right">
+          <template #default="{ row }">{{ fmtMoney(row.amount) }}</template>
         </el-table-column>
-        <el-table-column prop="reason" label="逻辑" min-width="200">
+        <el-table-column prop="reason"  label="逻辑"    min-width="180">
           <template #default="{ row }">
-            <span class="reason-text">{{ row.reason || '-' }}</span>
+            <span class="reason-text" :title="row.reason">{{ row.reason || '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="80" align="center">
+        <el-table-column label="操作" width="70" align="center">
           <template #default="{ row }">
-            <el-button link type="danger" size="small" @click="removeTrade(row.id!)">删除</el-button>
+            <el-button link type="danger" size="small" @click="removeTrade(row.id!)">删</el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <el-empty v-if="trades.length === 0" description="暂无调仓记录" />
+      <div v-if="tableLoading" style="text-align:center;padding:40px;color:#999">
+        <el-icon class="is-loading" style="font-size:20px"><Loading /></el-icon>
+        <div style="margin-top:8px">加载中…</div>
+      </div>
+
+      <el-empty v-else-if="!tableLoading && trades.length === 0" description="暂无调仓记录，请上传成交文件" />
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { usePortfolioStore } from '@/stores/portfolio'
+import { Upload, Loading } from '@element-plus/icons-vue'
+import axios from 'axios'
+import { tradesApi } from '@/api'
 import type { TradeRecord } from '@/types'
 
-const store = usePortfolioStore()
-const showForm = ref(false)
-const today = new Date().toISOString().split('T')[0]
+const trades       = ref<TradeRecord[]>([])
+const tableLoading = ref(false)
+const showUpload   = ref(false)
+const uploading    = ref(false)
+const uploadRef    = ref()
+const fileList     = ref<{ name: string; raw?: File }[]>([])
+const queryRange   = ref<string[] | null>(null)
+const queryTicker  = ref('')
 
-const form = ref<TradeRecord>({
-  date: today, ticker: '', name: '', action: 'buy',
-  quantity: 0, price: 0, amount: 0, reason: '',
-})
-
-const trades = ref<TradeRecord[]>([])
-
-function calcAmount() {
-  form.value.amount = form.value.quantity * form.value.price
+async function loadTrades() {
+  tableLoading.value = true
+  try {
+    const [start, end] = queryRange.value || []
+    const res = await tradesApi.list({
+      start_date: start || undefined,
+      end_date:   end   || undefined,
+      ticker:     queryTicker.value || undefined,
+    })
+    trades.value = res.data
+  } catch {
+    ElMessage.error('加载调仓记录失败')
+  } finally {
+    tableLoading.value = false
+  }
 }
 
-function actionLabel(a: string) {
-  return { buy: '买入', sell: '卖出', adjust: '调仓' }[a] || a
+function actionLabel(a?: string) {
+  return { buy: '买入', sell: '卖出', adjust: '调仓' }[a || ''] || a || '—'
+}
+function actionTag(a?: string) {
+  return { buy: 'danger', sell: 'success', adjust: 'warning' }[a || ''] || 'info'
+}
+function fmtMoney(v?: number | null) {
+  if (v == null) return '—'
+  return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function actionTagType(a: string) {
-  return { buy: 'danger', sell: 'success', adjust: 'warning' }[a] || 'info'
+function onFileChange(file: { name: string; raw?: File }) {
+  if (!file.raw) return
+  fileList.value = [{ name: file.name, raw: file.raw }]
+}
+function onFileRemove() {
+  fileList.value = []
 }
 
-async function submit() {
-  if (!form.value.ticker || !form.value.reason) {
-    ElMessage.warning('请填写股票代码和调仓逻辑')
+async function submitUpload() {
+  const raw = fileList.value[0]?.raw
+  if (!raw) {
+    ElMessage.error('请先选择文件')
     return
   }
-  calcAmount()
-  await store.addTrade({ ...form.value })
-  showForm.value = false
-  form.value = { date: today, ticker: '', name: '', action: 'buy', quantity: 0, price: 0, amount: 0, reason: '' }
-  await load()
-  ElMessage.success('调仓记录已保存')
+  const formData = new FormData()
+  formData.append('file', raw)
+  uploading.value = true
+  try {
+    const res = await axios.post('/api/trades/upload-xlsx', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    ElMessage.success(`上传成功：${res.data.count} 条调仓记录`)
+    resetUpload()
+    showUpload.value = false
+    await loadTrades()
+  } catch (err: unknown) {
+    const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+    ElMessage.error(detail || '上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+function resetUpload() {
+  fileList.value = []
+  uploadRef.value?.clearFiles()
 }
 
 async function removeTrade(id: number) {
-  await store.trades.splice(0, 0) // trigger store
-  const res = await import('@/api').then(m => m.tradesApi.delete(id))
-  if (res.status === 200 || res.status === 204) {
+  try {
+    await tradesApi.delete(id)
     trades.value = trades.value.filter(t => t.id !== id)
     ElMessage.success('已删除')
+  } catch {
+    ElMessage.error('删除失败')
   }
 }
 
-async function load() {
-  const res = await import('@/api').then(m => m.tradesApi.list())
-  trades.value = res.data
-}
+const tickerOptions = computed(() => {
+  const map = new Map<string, { ticker: string; name: string }>()
+  for (const t of trades.value) {
+    if (t.ticker && !map.has(t.ticker)) {
+      map.set(t.ticker, { ticker: t.ticker, name: t.name || t.ticker })
+    }
+  }
+  return Array.from(map.values())
+})
 
-onMounted(load)
+onMounted(loadTrades)
 </script>
 
 <style scoped lang="scss">
-.trades-page { padding: 0; }
-
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-weight: 600;
 }
-
-.form-card {
+.header-actions {
+  display: flex;
+  align-items: center;
+}
+.upload-panel {
+  margin-bottom: 16px;
   padding: 16px;
   background: #fafafa;
-  border-radius: 4px;
-  margin-bottom: 16px;
+  border-radius: 6px;
 }
-
 .reason-text {
   font-size: 12px;
   color: #606266;
@@ -176,6 +260,5 @@ onMounted(load)
   text-overflow: ellipsis;
   white-space: nowrap;
   display: block;
-  max-width: 300px;
 }
 </style>
