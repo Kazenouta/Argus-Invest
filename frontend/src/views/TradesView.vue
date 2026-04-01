@@ -5,7 +5,6 @@
         <div class="card-header">
           <span>调仓记录</span>
           <div class="header-actions">
-            <!-- 日期筛选 -->
             <el-date-picker
               v-model="queryRange"
               type="daterange"
@@ -17,7 +16,6 @@
               style="width: 240px; margin-right: 8px"
               @change="loadTrades"
             />
-            <!-- 按股票筛选 -->
             <el-select
               v-model="queryTicker"
               placeholder="全部股票"
@@ -94,44 +92,27 @@
         size="small"
         style="margin-top: 12px"
       >
-        <el-table-column prop="date"     label="日期"     width="110" />
-        <el-table-column prop="ticker"  label="代码"     width="110" />
-        <el-table-column prop="name"    label="名称"     width="120" />
-        <el-table-column prop="action"  label="方向"     width="75"  align="center">
+        <el-table-column prop="date"    label="日期"   width="110" />
+        <el-table-column prop="ticker" label="代码"   width="110" />
+        <el-table-column prop="name"   label="名称"   width="120" />
+        <el-table-column prop="action" label="方向"   width="75"  align="center">
           <template #default="{ row }">
             <el-tag :type="actionTag(row.action)" size="small">{{ actionLabel(row.action) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="quantity" label="数量"   width="90"  align="right" />
-        <el-table-column prop="price"    label="价格"    width="90"  align="right">
+        <el-table-column prop="quantity" label="数量" width="90"  align="right" />
+        <el-table-column prop="price"    label="价格"  width="90"  align="right">
           <template #default="{ row }">{{ row.price?.toFixed(3) }}</template>
         </el-table-column>
-        <el-table-column prop="amount"  label="金额"    width="110" align="right">
+        <el-table-column prop="amount"  label="金额"  width="110" align="right">
           <template #default="{ row }">{{ fmtMoney(row.amount) }}</template>
         </el-table-column>
-        <el-table-column prop="reason"  label="逻辑"    min-width="220">
+        <el-table-column prop="reason" label="逻辑" min-width="220">
           <template #default="{ row }">
-            <!-- 非编辑状态 -->
-            <div v-if="editingId !== row.id" class="reason-cell" @click="startEdit(row)">
-              <span class="reason-text" :title="row.reason">{{ row.reason || '点击填写逻辑...' }}</span>
-              <el-icon class="edit-icon"><Edit /></el-icon>
-            </div>
-            <!-- 编辑状态 -->
-            <div v-else class="reason-edit">
-              <el-input
-                v-model="editReason"
-                type="textarea"
-                :rows="2"
-                :autosize="{ minRows: 1, maxRows: 3 }"
-                size="small"
-                placeholder="描述操作理由和判断依据..."
-                @keyup.enter.ctrl="saveEdit(row)"
-                @keyup.escape="cancelEdit"
-              />
-              <div class="edit-actions">
-                <el-button type="primary" size="small" @click="saveEdit(row)">保存</el-button>
-                <el-button size="small" @click="cancelEdit">取消</el-button>
-              </div>
+            <div class="reason-cell" @click="openEditDialog(row)">
+              <span class="reason-text" :title="row.reason">
+                {{ row.reason || '点击填写逻辑...' }}
+              </span>
             </div>
           </template>
         </el-table-column>
@@ -149,20 +130,45 @@
 
       <el-empty v-else-if="!tableLoading && trades.length === 0" description="暂无调仓记录，请上传成交文件" />
     </el-card>
+
+    <!-- ── 逻辑编辑弹窗 ─────────────────────────────────── -->
+    <el-dialog
+      v-model="dialogVisible"
+      :title="`填写逻辑 — ${dialogRow?.name || ''} (${dialogRow?.ticker || ''})`"
+      width="520px"
+      :append-to-body="true"
+      class="reason-dialog"
+    >
+      <el-form label-width="0">
+        <el-form-item>
+          <el-input
+            v-model="dialogReason"
+            type="textarea"
+            :rows="5"
+            :autosize="{ minRows: 3, maxRows: 8 }"
+            placeholder="描述本次操作的判断依据和逻辑，如：5日线上穿10日线，成交量放大至20日均量1.5倍，基本面业绩预增..."
+            maxlength="500"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="dialogSaving" @click="confirmEdit">确定</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Upload, Loading, Edit } from '@element-plus/icons-vue'
-import axios from 'axios'
+import { Upload, Loading } from '@element-plus/icons-vue'
 import { tradesApi } from '@/api'
 import type { TradeRecord } from '@/types'
-
-const editingId = ref<number | null>(null)
-const editReason = ref('')
-const originalReason = ref('')
 
 const trades       = ref<TradeRecord[]>([])
 const tableLoading = ref(false)
@@ -173,6 +179,13 @@ const fileList     = ref<{ name: string; raw?: File }[]>([])
 const queryRange   = ref<string[] | null>(null)
 const queryTicker  = ref('')
 
+// ── 弹窗状态 ─────────────────────────────────────────────
+const dialogVisible = ref(false)
+const dialogSaving  = ref(false)
+const dialogRow     = ref<TradeRecord | null>(null)
+const dialogReason  = ref('')
+
+// ── 加载数据 ─────────────────────────────────────────────
 async function loadTrades() {
   tableLoading.value = true
   try {
@@ -190,45 +203,30 @@ async function loadTrades() {
   }
 }
 
-function actionLabel(a?: string) {
-  return { buy: '买入', sell: '卖出', adjust: '调仓' }[a || ''] || a || '—'
-}
-function actionTag(a?: string) {
-  return { buy: 'danger', sell: 'success', adjust: 'warning' }[a || ''] || 'info'
-}
-function fmtMoney(v?: number | null) {
-  if (v == null) return '—'
-  return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// ── 弹窗相关 ─────────────────────────────────────────────
+function openEditDialog(row: TradeRecord) {
+  dialogRow.value    = row
+  dialogReason.value = row.reason || ''
+  dialogVisible.value = true
 }
 
-function startEdit(row: TradeRecord) {
-  editingId.value = row.id!
-  editReason.value = row.reason || ''
-  originalReason.value = row.reason || ''
-}
-
-async function saveEdit(row: TradeRecord) {
-  if (editReason.value.trim() === (originalReason.value.trim())) {
-    cancelEdit()
-    return
-  }
+async function confirmEdit() {
+  const row = dialogRow.value
+  if (!row) return
+  dialogSaving.value = true
   try {
-    const updated = { ...row, reason: editReason.value.trim() }
-    await tradesApi.update(row.id!, updated)
-    row.reason = editReason.value.trim()
+    await tradesApi.update(row.id!, { ...row, reason: dialogReason.value.trim() })
+    row.reason = dialogReason.value.trim()
+    dialogVisible.value = false
     ElMessage.success('逻辑已保存')
   } catch {
     ElMessage.error('保存失败')
+  } finally {
+    dialogSaving.value = false
   }
-  cancelEdit()
 }
 
-function cancelEdit() {
-  editingId.value = null
-  editReason.value = ''
-  originalReason.value = ''
-}
-
+// ── 上传相关 ─────────────────────────────────────────────
 function onFileChange(file: { name: string; raw?: File }) {
   if (!file.raw) return
   fileList.value = [{ name: file.name, raw: file.raw }]
@@ -239,24 +237,20 @@ function onFileRemove() {
 
 async function submitUpload() {
   const raw = fileList.value[0]?.raw
-  if (!raw) {
-    ElMessage.error('请先选择文件')
-    return
-  }
+  if (!raw) { ElMessage.error('请先选择文件'); return }
   const formData = new FormData()
   formData.append('file', raw)
   uploading.value = true
   try {
-    const res = await axios.post('/api/trades/upload-xlsx', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
-    ElMessage.success(`上传成功：${res.data.count} 条调仓记录`)
+    const res = await fetch('/api/trades/upload-xlsx', { method: 'POST', body: formData })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.detail || '上传失败')
+    ElMessage.success(`上传成功：${data.count} 条调仓记录`)
     resetUpload()
     showUpload.value = false
     await loadTrades()
   } catch (err: unknown) {
-    const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-    ElMessage.error(detail || '上传失败')
+    ElMessage.error((err as Error).message || '上传失败')
   } finally {
     uploading.value = false
   }
@@ -267,6 +261,7 @@ function resetUpload() {
   uploadRef.value?.clearFiles()
 }
 
+// ── 删除 ─────────────────────────────────────────────────
 async function removeTrade(id: number) {
   try {
     await tradesApi.delete(id)
@@ -275,6 +270,18 @@ async function removeTrade(id: number) {
   } catch {
     ElMessage.error('删除失败')
   }
+}
+
+// ── 辅助 ─────────────────────────────────────────────────
+function actionLabel(a?: string) {
+  return { buy: '买入', sell: '卖出', adjust: '调仓' }[a || ''] || a || '—'
+}
+function actionTag(a?: string) {
+  return { buy: 'danger', sell: 'success', adjust: 'warning' }[a || ''] || 'info'
+}
+function fmtMoney(v?: number | null) {
+  if (v == null) return '—'
+  return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 const tickerOptions = computed(() => {
@@ -306,39 +313,25 @@ onMounted(loadTrades)
   background: #fafafa;
   border-radius: 6px;
 }
-.reason-text {
-  font-size: 12px;
-  color: #606266;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: block;
-}
-
 .reason-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   cursor: pointer;
-  &:hover .edit-icon { opacity: 1; }
+  padding: 2px 0;
   .reason-text {
-    flex: 1;
+    font-size: 12px;
     color: #909399;
     font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+    &:not([title=""]) { color: #606266; font-style: normal; }
   }
-  .edit-icon {
-    opacity: 0;
-    color: #409eff;
-    transition: opacity 0.2s;
-    font-size: 12px;
-  }
+  &:hover .reason-text { color: #409eff; text-decoration: underline; }
 }
 
-.reason-edit {
-  .edit-actions {
-    display: flex;
-    gap: 4px;
-    margin-top: 4px;
-  }
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 </style>
