@@ -1,6 +1,7 @@
 """
 Portfolio API router.
 """
+from __future__ import annotations
 import io
 from datetime import date, datetime
 from typing import Optional

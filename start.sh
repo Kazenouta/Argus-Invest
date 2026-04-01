@@ -12,7 +12,7 @@ echo "🚀 启动 Argus-Invest..."
 # 启动后端
 echo "📡 启动后端服务 (FastAPI)..."
 cd "$BACKEND_DIR"
-PYTHONPATH="$BACKEND_DIR" /Users/bxz/Library/Python/3.9/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+PYTHONPATH="$BACKEND_DIR" /Users/bxz/Library/Python/3.9/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload &
 BACKEND_PID=$!
 echo "后端 PID: $BACKEND_PID"
 
