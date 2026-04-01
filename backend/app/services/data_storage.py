@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TypeVar, Generic, Type, Optional
 from datetime import date, datetime
 import pandas as pd
+import threading
 
 from app.config import settings
 
@@ -21,12 +22,15 @@ class DataStorage:
     """
 
     _conn: Optional[duckdb.DuckDBPyConnection] = None
+    _lock: threading.Lock = threading.Lock()
 
     @classmethod
     def get_conn(cls) -> duckdb.DuckDBPyConnection:
-        """获取 DuckDB 连接（单例）"""
+        """获取 DuckDB 连接（单例，线程安全）"""
         if cls._conn is None:
-            cls._conn = duckdb.connect()
+            with cls._lock:
+                if cls._conn is None:  # 二次检查
+                    cls._conn = duckdb.connect()
         return cls._conn
 
     @classmethod
@@ -62,19 +66,26 @@ class DataStorage:
 
     @classmethod
     def read_parquet(cls, path: Path) -> pd.DataFrame:
-        """读取 Parquet 文件（文件不存在时返回空 DataFrame）"""
+        """读取 Parquet 文件（文件不存在时返回空 DataFrame）
+
+        直接用 pandas.read_parquet（底层 pyarrow），不走 DuckDB 连接，
+        避免多线程并发访问导致崩溃。
+        """
         if not path.exists():
             return pd.DataFrame()
-        conn = cls.get_conn()
-        return conn.execute(f"SELECT * FROM read_parquet('{path}')").fetchdf()
+        return pd.read_parquet(path)
 
     @classmethod
     def write_parquet(cls, path: Path, df: pd.DataFrame) -> None:
-        """写入 Parquet 文件（覆盖）"""
-        conn = cls.get_conn()
-        # 先删除旧文件，再写入
-        path.unlink(missing_ok=True)
-        conn.execute(f"COPY (SELECT * FROM df) TO '{path}' (FORMAT PARQUET)")
+        """写入 Parquet 文件（覆盖）
+
+        直接用 pandas.to_parquet()（底层 pyarrow）写入，
+        避免通过 DuckDB 单例连接操作文件导致后台线程崩溃。
+        """
+        # pandas/pyarrow 写入，不走 DuckDB 连接
+        df.to_parquet(path, index=False)
+        # 确保落盘
+        path.stat()
 
     @classmethod
     def append_parquet(cls, path: Path, df: pd.DataFrame) -> None:
