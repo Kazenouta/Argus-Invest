@@ -40,98 +40,153 @@ def upload_portfolio_xlsx(
     file: UploadFile = File(..., description="持仓 xlsx 文件"),
 ):
     """
-    上传持仓 xlsx 文件，自动解析并存储。
+    解析券商格式持仓 Excel（如同花顺/东方财富导出格式），自动提取持仓数据。
 
-    期望 Excel 列（表头行后第一行开始）：
-    股票代码 | 股票名称 | 持股数量 | 成本价 | 当前价 | 仓位占比%
+    典型格式（Sheet1）：
+      行1-7  ：账户头信息（资金账号/总资产等）
+      行8    ：列标题（证券代码/证券名称/拥股数量/最新价/盈亏成本/浮动盈亏/盈亏比例/市场/仓位）
+      行9-20 ：持仓明细
+      行21+  ：合计行（跳过）
 
-    示例：
-    SZ000001 | 平安银行 | 1000 | 12.50 | 13.20 | 22.0
-    SH600519 | 贵州茅台 | 200 | 1800 | 1850 | 18.5
+    字段映射：
+      quantity       ← 拥股数量（列2）
+      cost_price     ← 盈亏成本（列5，即保本价格）
+      current_price  ← 最新价（列4）
+      market_value   ← 证券市值（列6）
+      float_profit   ← 浮动盈亏（列8）
+      float_ratio    ← 盈亏比例（列9，带%）
+      position_ratio ← 仓位（列19，带%）
     """
-    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
 
     try:
         contents = file.file.read()
         wb = openpyxl.load_workbook(io.BytesIO(contents), data_only=True)
         ws = wb.active
-
         rows = list(ws.iter_rows(values_only=True))
-        if len(rows) < 2:
-            raise HTTPException(status_code=400, detail="Excel 文件数据行不足（需包含表头）")
 
-        # 尝试找表头行
+        if len(rows) < 10:
+            raise HTTPException(status_code=400, detail="Excel 数据行不足")
+
+        # ── 1. 定位表头行 ─────────────────────────────────────
+        HEADER_KEYWORDS = ["证券代码", "股票代码", "代码", "ticker"]
         header_row_idx = None
-        headers = []
         for i, row in enumerate(rows):
             if row and any(cell is not None for cell in row):
-                # 取前6个非空单元格作为候选表头
-                cells = [str(c).strip() if c is not None else "" for c in row[:8]]
-                if any(kw in "".join(cells) for kw in ["代码", "名称", "数量", "成本", "价格", "仓位", "占比"]):
-                    headers = cells
+                first_cells = [str(c).strip() for c in row[:5] if c is not None]
+                if any(kw in " ".join(first_cells) for kw in HEADER_KEYWORDS):
                     header_row_idx = i
+                    headers = [str(c).strip() if c is not None else "" for c in row]
                     break
 
         if header_row_idx is None:
-            # 没找到表头，假设第1行就是数据
-            headers = ["股票代码", "股票名称", "持股数量", "成本价", "当前价", "仓位占比%"]
-            header_row_idx = 0
-            data_rows = rows[header_row_idx:]
-        else:
-            data_rows = rows[header_row_idx + 1:]
+            raise HTTPException(status_code=400, detail="未找到表头行（需包含「证券代码」列）")
 
-        # 列索引映射
-        def col_idx(keywords):
+        data_rows = rows[header_row_idx + 1:]
+
+        # ── 2. 列索引映射（容错匹配）──────────────────────────
+        def col_idx(keywords: list[str]) -> int:
             for j, h in enumerate(headers):
                 if any(kw in str(h) for kw in keywords):
                     return j
             return -1
 
-        col_code   = col_idx(["代码", "code", "stock_code"])
-        col_name   = col_idx(["名称", "name", "stock_name"])
-        col_qty    = col_idx(["数量", "quantity", "持股", "持股数量"])
-        col_cost   = col_idx(["成本", "cost"])
-        col_price  = col_idx(["当前", "现价", "price", "current_price", "最新"])
-        col_ratio  = col_idx(["仓位", "占比", "ratio", "position_ratio", "比例"])
+        # 必填列
+        col_code   = col_idx(["证券代码", "股票代码", "代码"])
+        col_name   = col_idx(["证券名称", "股票名称", "名称"])
+        col_qty    = col_idx(["拥股数量", "持股数量", "股票数量", "数量"])
+        col_price  = col_idx(["最新价", "当前价", "现价", "价格", "price"])
+        col_cost   = col_idx(["盈亏成本", "参考保本价", "成本价", "cost"])  # 盈亏成本 = 保本价
+        col_mv     = col_idx(["证券市值", "市值", "market_value"])
+        col_fp     = col_idx(["浮动盈亏", "盈亏金额"])
+        col_fpr    = col_idx(["盈亏比例", "盈亏比例%"])
+        col_ratio  = col_idx(["仓位", "仓位占比", "position", "ratio"])
+        col_market = col_idx(["市场"])
 
-        missing = []
-        if col_code < 0:   missing.append("股票代码")
-        if col_name < 0:   missing.append("股票名称")
-        if col_qty < 0:    missing.append("持股数量")
-        if col_cost < 0:   missing.append("成本价")
-        if col_price < 0:  missing.append("当前价")
-        if col_ratio < 0:  missing.append("仓位占比%")
-
+        required = [("证券代码", col_code), ("证券名称", col_name),
+                    ("拥股数量", col_qty), ("最新价", col_price),
+                    ("盈亏成本", col_cost), ("浮动盈亏", col_fp)]
+        missing = [name for name, idx in required if idx < 0]
         if missing:
             raise HTTPException(
                 status_code=400,
-                detail=f"缺少必需列：{', '.join(missing)}，请检查 Excel 表头"
+                detail=f"缺少必需列：{', '.join(missing)}，请确认 Excel 表头包含这些列"
             )
 
-        records = []
+        # ── 3. 解析每一行 ────────────────────────────────────
+        def parse_pct(v: str | float | None) -> float:
+            """解析百分比字符串，如 '1.22%' → 1.22"""
+            if v is None or v == "--" or v == "":
+                return 0.0
+            s = str(v).strip().replace("%", "").replace(" ", "")
+            try:
+                return float(s)
+            except (ValueError, TypeError):
+                return 0.0
+
+        def parse_num(v: str | float | None, default: float = 0.0) -> float:
+            if v is None or v == "" or v == "--":
+                return default
+            try:
+                return float(str(v).strip().replace(",", ""))
+            except (ValueError, TypeError):
+                return default
+
+        records: list[PortfolioRecord] = []
         portfolio_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        parsed_tickers: set[str] = set()
 
         for row in data_rows:
-            if not row or all(cell is None for cell in row):
+            if not row or len(row) < 5:
                 continue
-            cells = [cell for cell in row]
+            cells = list(row)
+
+            # 证券代码：清理 tab 空格，补齐 6 位，加上市场前缀 SZ/SH/HK
+            raw_code = str(cells[col_code]).replace("\t", "").replace(" ", "").strip()
+            if not raw_code or raw_code in ("", "None"):
+                continue  # 跳过合计行
+            code6 = raw_code.zfill(6) if raw_code.isdigit() else raw_code
+            # 根据市场字段补前缀
+            market_raw = str(cells[col_market]).strip() if col_market >= 0 and col_market < len(cells) and cells[col_market] else ""
+            if "深" in market_raw or "SZ" in market_raw.upper():
+                ticker = "SZ" + code6
+            elif "沪" in market_raw or "SH" in market_raw.upper():
+                ticker = "SH" + code6
+            elif "港" in market_raw:
+                ticker = "HK" + code6
+            else:
+                ticker = code6
+            if ticker in parsed_tickers:
+                continue
+            parsed_tickers.add(ticker)
+
+            name = str(cells[col_name]).strip() if col_name < len(cells) and cells[col_name] else ""
+
+            # 拥股数量
+            qty_raw = cells[col_qty] if col_qty < len(cells) else None
             try:
-                ticker = str(cells[col_code]).strip().replace(" ", "")
-                name   = str(cells[col_name]).strip() if col_name >= 0 and col_name < len(cells) else ""
-                qty    = int(float(cells[col_qty])) if col_qty >= 0 and col_qty < len(cells) and cells[col_qty] is not None else 0
-                cost   = float(cells[col_cost]) if col_cost >= 0 and col_cost < len(cells) and cells[col_cost] is not None else 0.0
-                price  = float(cells[col_price]) if col_price >= 0 and col_price < len(cells) and cells[col_price] is not None else 0.0
-                ratio  = float(cells[col_ratio]) if col_ratio >= 0 and col_ratio < len(cells) and cells[col_ratio] is not None else 0.0
+                qty = int(float(str(qty_raw).strip().replace(",", "")))
             except (ValueError, TypeError):
-                continue
+                qty = 0
+            if qty <= 0:
+                continue  # 持仓为 0 跳过
 
-            if not ticker or qty <= 0:
-                continue
-
-            market_value = round(qty * price, 2)
-            float_profit = round((price - cost) * qty, 2)
-            float_ratio  = round((price / cost - 1) * 100, 2) if cost > 0 else 0.0
+            # 最新价
+            price = parse_num(cells[col_price] if col_price < len(cells) else None)
+            # 成本价（盈亏成本 = 保本价，即卖出不亏的价格）
+            cost = parse_num(cells[col_cost] if col_cost < len(cells) else None)
+            # 市值（证券市值优先，否则用数量×现价推算）
+            mv_raw = cells[col_mv] if col_mv < len(cells) else None
+            mv = parse_num(mv_raw, default=qty * price) if mv_raw != "--" else qty * price
+            # 浮动盈亏
+            float_profit = parse_num(cells[col_fp] if col_fp < len(cells) else None)
+            # 盈亏比例：直接读原始文件（券商已算好），避免自行计算时 cost≈0 导致溢出
+            float_ratio = parse_pct(cells[col_fpr] if col_fpr < len(cells) else None)
+            # 仓位占比（带%）
+            position_ratio = parse_pct(cells[col_ratio] if col_ratio < len(cells) else None)
+            # 市场
+            market = str(cells[col_market]).strip() if col_market >= 0 and col_market < len(cells) and cells[col_market] else ""
 
             records.append(PortfolioRecord(
                 ticker=ticker,
@@ -139,25 +194,37 @@ def upload_portfolio_xlsx(
                 quantity=qty,
                 cost_price=round(cost, 3),
                 current_price=round(price, 3),
-                market_value=market_value,
-                float_profit=float_profit,
+                market_value=round(mv, 2),
+                float_profit=round(float_profit, 2),
                 float_profit_ratio=round(float_ratio, 2),
-                position_ratio=round(ratio, 2),
+                position_ratio=round(position_ratio, 2),
                 date=portfolio_date,
             ))
 
         if not records:
-            raise HTTPException(status_code=400, detail="未能从文件中解析出有效持仓记录，请检查格式")
+            raise HTTPException(status_code=400, detail="未能从文件中解析出有效持仓记录，请检查文件内容")
 
-        # 写入存储（覆盖模式）
+        # ── 4. 写入存储（覆盖）────────────────────────────────
         df = pd.DataFrame([r.model_dump() for r in records])
         df["date"] = pd.to_datetime(df["date"]).dt.date
         DataStorage.write_portfolio(df)
 
-        return {"status": "ok", "date": date_str, "count": len(records), "records": records[:3]}
+        return {
+            "status": "ok",
+            "date": date_str,
+            "count": len(records),
+            "preview": [
+                {"ticker": r.ticker, "name": r.name, "qty": r.quantity,
+                 "cost": r.cost_price, "price": r.current_price,
+                 "float_profit": r.float_profit, "position_ratio": r.position_ratio}
+                for r in records[:5]
+            ],
+        }
 
     except BadZipFile:
         raise HTTPException(status_code=400, detail="文件格式错误，请上传有效的 .xlsx 文件")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解析失败: {str(e)}")
 
