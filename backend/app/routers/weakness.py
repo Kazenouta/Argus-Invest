@@ -45,7 +45,7 @@ def save_weakness_profile(profile: WeaknessProfile):
 
 
 @router.put("/{item_id}/confirm")
-def confirm_weakness_item(item_id: int, confirmed: bool = True):
+def confirm_weakness_item(item_id: str, confirmed: bool = True):
     """确认/取消确认单个弱点条目"""
     df = DataStorage.read_weakness_profile()
     if df.empty or "id" not in df.columns or item_id not in df["id"].values:

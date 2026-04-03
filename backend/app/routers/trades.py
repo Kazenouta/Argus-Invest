@@ -34,6 +34,53 @@ def add_trade(trade: TradeRecord):
     return {"status": "ok", "id": new_id}
 
 
+def _infer_ticker(code6: str, account: str = "") -> str:
+    """根据代码和股东账号推断交易所前缀"""
+    # 有股东代码时优先用它判断
+    if account:
+        acc = account.replace("\t", "").strip().upper()
+        if "深" in acc or "SZ" in acc or acc.startswith("A") and not any(x in acc for x in ["沪", "SH"]):
+            return "SZ" + code6
+        if "沪" in acc or "SH" in acc:
+            return "SH" + code6
+        if "港" in acc:
+            return "HK" + code6
+    # 无股东代码时，根据代码首位推断
+    if code6.isdigit():
+        first = code6[0]
+        if first in ("5", "6", "9", "11", "13", "15"):
+            return "SH" + code6
+        if first in ("0", "1", "2", "3", "4", "8"):
+            return "SZ" + code6
+        if first == "8" and len(code6) >= 5:
+            return "HK" + code6
+    return code6
+
+
+def _parse_num(v, default=0.0) -> float:
+    if v is None or str(v).strip() in ("", "None"):
+        return default
+    try:
+        return float(str(v).strip().replace(",", ""))
+    except (ValueError, TypeError):
+        return default
+
+
+def _direction_to_action(direction: str) -> Optional[str]:
+    d = str(direction).strip()
+    if "买入" in d:
+        return "buy"
+    if "卖出" in d:
+        return "sell"
+    return None
+
+
+def _ticker_from_code(raw_code: str) -> str:
+    code = raw_code.replace("\t", "").replace(" ", "").strip()
+    code6 = code.zfill(6) if code.isdigit() else code
+    return _infer_ticker(code6)
+
+
 @router.post("/upload-xlsx")
 def upload_trades_xlsx(
     file: UploadFile = File(..., description="当日成交 xlsx 文件"),
@@ -41,14 +88,10 @@ def upload_trades_xlsx(
     """
     解析券商格式当日成交 Excel，批量追加调仓记录。
 
-    格式（Sheet1）：
-      行6   ：表头（流水号/证券代码/证券名称/成交类型/方向/成交状态/
-               成交数量/成交价格/成交金额/成交时间/股东代码/委托数量/委托价格）
-      行7+  ：成交明细
-
-    映射规则：
-      direction → action：证券买入→buy，证券卖出→sell，增强限价卖出→sell，撤单→adjust
-      status → 成交/撤单：撤单记录 amount=0 不入库
+    支持两种格式：
+    - 旧格式（成交明细）：13列，有「流水号/方向/成交状态/成交时间/股东代码」
+    - 新格式（成交汇总）：7列，有「证券代码/证券名称/买卖类别/成交类型/成交数量」，
+      无成交时间和股东代码，日期从「查询日期」表头行获取
     """
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 文件")
@@ -62,126 +105,170 @@ def upload_trades_xlsx(
         if len(rows) < 7:
             raise HTTPException(status_code=400, detail="文件数据行不足")
 
-        # 定位表头行（第6行，index=5）
+        # ── 检测格式：找表头行，并判断是哪一种 ──────────────────────
         header_row_idx = None
+        headers = []
+        format_type = None  # "detail" | "summary"
+
         for i, row in enumerate(rows):
-            if row and str(row[0]).strip() in ("流水号", "委托号", "成交编号"):
+            if not row:
+                continue
+            first = str(row[0]).strip() if row[0] else ""
+            if first in ("流水号", "委托号", "成交编号"):
                 header_row_idx = i
                 headers = [str(c).strip() if c else "" for c in row]
+                format_type = "detail"
                 break
+            # 新格式（汇总）：表头直接是证券代码/证券名称/买卖类别
+            if first in ("证券代码",) and len(row) >= 5:
+                # 进一步确认：第3列是买卖类别
+                h3 = str(row[2]).strip() if len(row) > 2 else ""
+                if "买卖类别" in h3 or "方向" in h3:
+                    header_row_idx = i
+                    headers = [str(c).strip() if c else "" for c in row]
+                    format_type = "summary"
+                    break
 
         if header_row_idx is None:
-            raise HTTPException(status_code=400, detail="未找到表头行（需以「流水号」开头）")
+            raise HTTPException(status_code=400, detail="未找到表头行（需以「流水号」或「证券代码」开头）")
+
+        # ── 从表头第4行（index=3）提取查询日期 ──────────────────────
+        query_date = date.today()
+        if len(rows) >= 4 and rows[3]:
+            date_str = str(rows[3][1]).strip() if rows[3][1] else ""
+            try:
+                query_date = datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                pass
 
         data_rows = rows[header_row_idx + 1:]
 
-        # 列索引
         def col(keyword: str) -> int:
             for j, h in enumerate(headers):
                 if keyword in h:
                     return j
             return -1
 
-        ci_serial = col("流水号")
-        ci_code   = col("证券代码")
-        ci_name   = col("证券名称")
-        ci_dir    = col("方向")
-        ci_status = col("成交状态")
-        ci_qty    = col("成交数量")
-        ci_price  = col("成交价格")
-        ci_amount = col("成交金额")
-        ci_time   = col("成交时间")
-        ci_account = col("股东代码")
+        # ── 旧格式（成交明细）解析 ────────────────────────────────
+        if format_type == "detail":
+            ci_code    = col("证券代码")
+            ci_name    = col("证券名称")
+            ci_dir     = col("方向")
+            ci_status  = col("成交状态")
+            ci_qty     = col("成交数量")
+            ci_price   = col("成交价格")
+            ci_amount  = col("成交金额")
+            ci_time    = col("成交时间")
+            ci_account = col("股东代码")
 
-        missing = []
-        for label, idx in [("证券代码", ci_code), ("证券名称", ci_name),
-                           ("方向", ci_dir), ("成交状态", ci_status),
-                           ("成交数量", ci_qty), ("成交价格", ci_price),
-                           ("成交时间", ci_time)]:
-            if idx < 0:
-                missing.append(label)
-        if missing:
-            raise HTTPException(status_code=400, detail=f"缺少列：{', '.join(missing)}")
+            missing = [l for l, idx in [
+                ("证券代码", ci_code), ("证券名称", ci_name),
+                ("方向", ci_dir), ("成交数量", ci_qty),
+                ("成交价格", ci_price),
+            ] if idx < 0]
+            if missing:
+                raise HTTPException(status_code=400, detail=f"缺少列：{', '.join(missing)}")
 
-        def parse_num(v, default=0.0):
-            if v is None or str(v).strip() in ("", "None"):
-                return default
-            try:
-                return float(str(v).strip().replace(",", ""))
-            except (ValueError, TypeError):
-                return default
+            raw_records: list[dict] = []
+            for row in data_rows:
+                if not row or len(row) < 5:
+                    continue
+                cells = list(row)
 
-        def direction_to_action(direction: str) -> Optional[str]:
-            d = str(direction).strip()
-            if "买入" in d:
-                return "buy"
-            elif "卖出" in d:
-                return "sell"
-            return None
+                raw_code = str(cells[ci_code]).replace("\t", "").replace(" ", "").strip() if ci_code >= 0 and ci_code < len(cells) else ""
+                if not raw_code or raw_code in ("", "None"):
+                    continue
 
-        # ── 先收集所有有效成交，再按 (date, ticker, action) 合并 ───
-        raw_records: list[dict] = []
+                code6 = raw_code.zfill(6) if raw_code.isdigit() else raw_code
+                account = str(cells[ci_account]).replace("\t", "").strip() if ci_account >= 0 and ci_account < len(cells) else ""
+                ticker = _infer_ticker(code6, account)
 
-        for row in data_rows:
-            if not row or len(row) < 5:
-                continue
-            cells = list(row)
+                status = str(cells[ci_status]).strip() if ci_status >= 0 and ci_status < len(cells) else ""
+                if "撤单" in status:
+                    continue
 
-            raw_code = str(cells[ci_code]).replace("\t", "").replace(" ", "").strip()
-            if not raw_code or raw_code in ("", "None"):
-                continue
+                direction = str(cells[ci_dir]).strip() if ci_dir >= 0 and ci_dir < len(cells) else ""
+                action = _direction_to_action(direction)
+                if action is None:
+                    continue
 
-            code6 = raw_code.zfill(6) if raw_code.isdigit() else raw_code
-            account = str(cells[ci_account]).replace("\t", "").strip() if ci_account >= 0 and ci_account < len(cells) else ""
-            if "深" in account or "SZ" in account.upper():
-                ticker = "SZ" + code6
-            elif "沪" in account or "SH" in account.upper():
-                ticker = "SH" + code6
-            elif "港" in account:
-                ticker = "HK" + code6
-            else:
-                ticker = code6
+                qty    = int(_parse_num(cells[ci_qty] if ci_qty < len(cells) else None))
+                price  = _parse_num(cells[ci_price] if ci_price < len(cells) else None)
+                amount = _parse_num(cells[ci_amount] if ci_amount < len(cells) else None, default=qty * price)
 
-            # 成交状态：撤单跳过
-            status = str(cells[ci_status]).strip() if ci_status >= 0 and ci_status < len(cells) else ""
-            if "撤单" in status:
-                continue
+                if qty <= 0:
+                    continue
 
-            # 方向 → action
-            direction = str(cells[ci_dir]).strip() if ci_dir >= 0 and ci_dir < len(cells) else ""
-            action = direction_to_action(direction)
-            if action is None:
-                continue
-
-            qty = int(parse_num(cells[ci_qty] if ci_qty < len(cells) else None))
-            price = parse_num(cells[ci_price] if ci_price < len(cells) else None)
-            amount = parse_num(cells[ci_amount] if ci_amount < len(cells) else None, default=qty * price)
-
-            if qty <= 0:
-                continue
-
-            # 成交时间 → date
-            time_str = str(cells[ci_time]).strip() if ci_time >= 0 and ci_time < len(cells) else ""
-            try:
-                trade_date = datetime.strptime(time_str[:19], "%Y-%m-%d %H:%M:%S").date()
-            except (ValueError, TypeError):
+                time_str = str(cells[ci_time]).strip() if ci_time >= 0 and ci_time < len(cells) else ""
                 try:
-                    trade_date = datetime.strptime(time_str[:10], "%Y-%m-%d").date()
+                    trade_date = datetime.strptime(time_str[:19], "%Y-%m-%d %H:%M:%S").date()
                 except (ValueError, TypeError):
-                    trade_date = date.today()
+                    try:
+                        trade_date = datetime.strptime(time_str[:10], "%Y-%m-%d").date()
+                    except (ValueError, TypeError):
+                        trade_date = date.today()
 
-            name = str(cells[ci_name]).strip() if ci_name >= 0 and ci_name < len(cells) else ""
+                name = str(cells[ci_name]).strip() if ci_name >= 0 and ci_name < len(cells) else ""
+                raw_records.append({
+                    "date": trade_date, "ticker": ticker, "name": name,
+                    "action": action, "quantity": qty, "price": price, "amount": amount,
+                })
 
-            raw_records.append({
-                "date": trade_date, "ticker": ticker, "name": name,
-                "action": action, "quantity": qty,
-                "price": price, "amount": amount,
-            })
+            if not raw_records:
+                raise HTTPException(status_code=400, detail="未解析出有效成交记录（可能全为撤单）")
 
-        if not raw_records:
-            raise HTTPException(status_code=400, detail="未解析出有效成交记录（可能全为撤单）")
+        # ── 新格式（成交汇总）解析 ─────────────────────────────────
+        else:
+            ci_code   = col("证券代码")
+            ci_name   = col("证券名称")
+            ci_dir    = col("买卖类别")   # 新格式用「买卖类别」而非「方向」
+            ci_type   = col("成交类型")
+            ci_qty    = col("成交数量")
+            ci_price  = col("成交价格")
+            ci_amount = col("成交金额")
 
-        # ── 按 (date, ticker, action) 合并：数量/金额累加，加权平均价格 ─
+            missing = [l for l, idx in [
+                ("证券代码", ci_code), ("证券名称", ci_name),
+                ("买卖类别", ci_dir), ("成交数量", ci_qty),
+                ("成交价格", ci_price),
+            ] if idx < 0]
+            if missing:
+                raise HTTPException(status_code=400, detail=f"缺少列：{', '.join(missing)}")
+
+            raw_records: list[dict] = []
+            for row in data_rows:
+                if not row or len(row) < 5:
+                    continue
+                cells = list(row)
+
+                raw_code = str(cells[ci_code]).replace("\t", "").replace(" ", "").strip() if ci_code >= 0 and ci_code < len(cells) else ""
+                if not raw_code or raw_code in ("", "None"):
+                    continue
+
+                ticker = _ticker_from_code(raw_code)
+
+                direction = str(cells[ci_dir]).strip() if ci_dir >= 0 and ci_dir < len(cells) else ""
+                action = _direction_to_action(direction)
+                if action is None:
+                    continue
+
+                qty    = int(_parse_num(cells[ci_qty] if ci_qty < len(cells) else None))
+                price  = _parse_num(cells[ci_price] if ci_price < len(cells) else None)
+                amount = _parse_num(cells[ci_amount] if ci_amount < len(cells) else None, default=qty * price)
+
+                if qty <= 0:
+                    continue
+
+                name = str(cells[ci_name]).strip() if ci_name >= 0 and ci_name < len(cells) else ""
+                raw_records.append({
+                    "date": query_date, "ticker": ticker, "name": name,
+                    "action": action, "quantity": qty, "price": price, "amount": amount,
+                })
+
+            if not raw_records:
+                raise HTTPException(status_code=400, detail="未解析出有效成交记录")
+
+        # ── 合并：按 (date, ticker, action) 累加数量/金额，加权均价 ─
         merged: dict[tuple, dict] = {}
         for r in raw_records:
             key = (r["date"], r["ticker"], r["action"])
@@ -189,7 +276,6 @@ def upload_trades_xlsx(
                 merged[key] = {**r}
             else:
                 m = merged[key]
-                # 加权平均价格
                 total_amount = m["amount"] + r["amount"]
                 total_qty    = m["quantity"] + r["quantity"]
                 m["price"]   = round(total_amount / total_qty, 3) if total_qty > 0 else 0
@@ -205,17 +291,15 @@ def upload_trades_xlsx(
                 reason="", created_at=datetime.now(),
             ))
 
-        # 按日期+标的排序
         records.sort(key=lambda r: (r.date, r.ticker, r.action))
 
-        # ── 按日期分组：同日期覆盖，不同日期追加 ─────────────────
+        # ── 同日期覆盖，不同日期追加 ──────────────────────────────
         uploaded_dates = set(r.date for r in records)
         existing_df = DataStorage.read_trades()
         dates_to_replace = [d for d in uploaded_dates if d in existing_df["date"].values]
         if dates_to_replace:
             existing_df = existing_df[~existing_df["date"].isin(dates_to_replace)]
 
-        # 生成新记录的 ID（取现有最大 ID + 1，递进分配）
         max_id = int(existing_df["id"].max()) if not existing_df.empty and "id" in existing_df.columns and existing_df["id"].notna().any() else 0
         for i, rec in enumerate(records):
             rec.id = max_id + i + 1
@@ -228,6 +312,8 @@ def upload_trades_xlsx(
 
         return {
             "status": "ok",
+            "format": format_type,
+            "date": str(query_date),
             "count": len(records),
             "dates_replaced": [str(d) for d in dates_to_replace],
             "preview": [

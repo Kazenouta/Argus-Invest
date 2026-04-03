@@ -70,6 +70,9 @@ export const thinkingApi = {
   add: (record: unknown) =>
     api.post('/thinking/', record),
 
+  update: (thinkingId: number, record: unknown) =>
+    api.put(`/thinking/${thinkingId}`, record),
+
   delete: (thinkingId: number) =>
     api.delete(`/thinking/${thinkingId}`),
 }

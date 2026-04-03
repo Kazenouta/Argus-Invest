@@ -22,7 +22,7 @@
 
           <el-sub-menu index="/portfolio">
             <template #title>
-              <el-icon><Coincedent /></el-icon>
+              <el-icon><Briefcase /></el-icon>
               <span>持仓管理</span>
             </template>
             <el-menu-item index="/portfolio">持仓看板</el-menu-item>
@@ -67,6 +67,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { Briefcase } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { storeToRefs } from 'pinia'
@@ -117,8 +118,14 @@ const pageTitle = computed(() => pageTitleMap[route.path] || 'Argus-Invest')
     }
   }
 
+  :deep(.el-sub-menu .el-menu) {
+    padding-left: 0 !important;
+  }
+
   :deep(.el-sub-menu .el-menu-item) {
     background-color: #1f2d3d !important;
+    padding-left: 68px !important;
+    min-height: 0 !important;
     &:hover {
       background-color: #263445 !important;
     }
@@ -126,6 +133,10 @@ const pageTitle = computed(() => pageTitleMap[route.path] || 'Argus-Invest')
       background-color: #263445 !important;
       color: #409EFF !important;
     }
+  }
+
+  :deep(.el-sub-menu__title) {
+    padding-left: 20px !important;
   }
 }
 

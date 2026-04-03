@@ -13,6 +13,7 @@ class ThinkingRecord(BaseModel):
     ticker: Optional[str] = Field(default=None, description="关联股票代码（可选）")
     ticker_name: Optional[str] = Field(default=None, description="股票名称")
     content: str = Field(description="思考内容")
+    ai_comment: Optional[str] = Field(default=None, description="AI 点评")
     action: Optional[str] = Field(default=None, description="关联操作，如 '买入XXX'")
     source: str = Field(default="manual", description="来源：manual / voice")
     trade_id: Optional[int] = Field(default=None, description="关联调仓记录ID")

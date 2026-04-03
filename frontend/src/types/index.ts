@@ -48,7 +48,9 @@ export interface ThinkingRecord {
   thinking_time: string
   ticker?: string
   ticker_name?: string
+  stock_names?: string
   content: string
+  ai_comment?: string
   action?: string
   source: 'manual' | 'voice'
   trade_id?: number

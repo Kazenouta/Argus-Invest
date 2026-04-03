@@ -8,10 +8,10 @@ from pydantic import BaseModel, Field
 
 class WeaknessItem(BaseModel):
     """弱点条目"""
-    id: Optional[int] = None
-    weakness_type: str = Field(description="弱点类型，如 'left_side_buy' / 'chase_rising' / 'over_position'")
-    title: str = Field(description="弱点标题，如 '下跌趋势补仓'")
-    description: str = Field(description="弱点描述")
+    id: Optional[str] = None
+    weakness_type: Optional[str] = Field(default=None, description="弱点类型，如 'left_side_buy' / 'chase_rising' / 'over_position'")
+    title: Optional[str] = Field(default=None, description="弱点标题，如 '下跌趋势补仓'")
+    description: Optional[str] = Field(default=None, description="弱点描述")
     occurrence_count: int = Field(default=0, description="历史出现次数")
     avg_loss_ratio: float = Field(default=0.0, description="平均亏损比例（%）")
     max_loss_ratio: float = Field(default=0.0, description="最大亏损比例（%）")

@@ -57,3 +57,56 @@ def reset_rules():
     """重置规则库为默认值"""
     default = RuleLibrary.default_rules()
     return save_rules(default)
+
+
+@router.get("/evaluate")
+def evaluate_portfolio():
+    """
+    对当前持仓进行全面规则评估（支撑/阻力版）。
+
+    返回每个持仓标的的关键价位分析 + 所有触发规则信号。
+    """
+    from app.services.data_storage import DataStorage
+    from app.services.rules_evaluator import evaluate_ticker, RuleResult
+
+    portfolio_df = DataStorage.read_portfolio()
+    if portfolio_df.empty:
+        return {"status": "ok", "positions": [], "alerts": [], "summary": {"total": 0, "with_signals": 0}}
+
+    alerts: list[dict] = []
+    positions_data: list[dict] = []
+
+    for _, row in portfolio_df.iterrows():
+        ticker = str(row["ticker"])
+        name = str(row.get("name", ticker))
+        cost_price = float(row["cost_price"])
+        quantity = int(row["quantity"])
+
+        levels, results = evaluate_ticker(
+            ticker=ticker,
+            name=name,
+            cost_price=cost_price,
+            quantity=quantity,
+        )
+
+        positions_data.append(levels.to_dict())
+        for r in results:
+            alerts.append(r.to_dict())
+
+    # 按 severity 排序（critical → major → minor）
+    severity_order = {"critical": 0, "major": 1, "minor": 2}
+    alerts.sort(key=lambda x: severity_order.get(x["severity"], 9))
+
+    return {
+        "status": "ok",
+        "evaluated_at": pd.Timestamp.now().isoformat(),
+        "summary": {
+            "total": len(positions_data),
+            "with_signals": len(set(a["ticker"] for a in alerts)),
+            "critical_count": sum(1 for a in alerts if a["severity"] == "critical"),
+            "major_count": sum(1 for a in alerts if a["severity"] == "major"),
+            "minor_count": sum(1 for a in alerts if a["severity"] == "minor"),
+        },
+        "positions": positions_data,
+        "alerts": alerts,
+    }
