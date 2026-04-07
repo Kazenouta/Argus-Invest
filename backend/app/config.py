@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     TRADES_FILE: str = "trades.parquet"
     WEAKNESS_FILE: str = "weakness.parquet"
     THINKING_FILE: str = "thinking.parquet"
+    PLAN_FILE: str = "portfolio_plan.parquet"
 
     # AI settings
     AI_MODEL: str = "minimax/MiniMax-M2.7"  # default model

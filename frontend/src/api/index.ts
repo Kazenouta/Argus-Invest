@@ -6,7 +6,7 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 10000,
+  timeout: 30000,
 })
 
 // ── Portfolio ───────────────────────────────────────────────────────────────
@@ -63,6 +63,17 @@ export const rulesApi = {
 
 // ── Thinking ─────────────────────────────────────────────────────────────────
 
+export const planApi = {
+  list: (ticker?: string) =>
+    api.get('/portfolio/plans/', { params: ticker ? { ticker } : {} }),
+  latest: () =>
+    api.get('/portfolio/plans/latest'),
+  add: (plan: unknown) =>
+    api.post('/portfolio/plans/', plan),
+  delete: (planId: number) =>
+    api.delete(`/portfolio/plans/${planId}`),
+}
+
 export const thinkingApi = {
   list: (params?: { start_date?: string; end_date?: string; ticker?: string }) =>
     api.get('/thinking/', { params }),
@@ -81,4 +92,19 @@ export const thinkingApi = {
 
 export const healthApi = {
   check: () => api.get('/health'),
+}
+
+// ── Monitor ─────────────────────────────────────────────────────────────────
+
+export const monitorApi = {
+  status: () => api.get('/monitor/status'),
+  rules: () => api.get('/monitor/rules'),
+  check: () => api.post('/monitor/check'),
+  events: () => api.get('/monitor/events'),
+}
+
+// ── Market Overview ─────────────────────────────────────────────────────────
+
+export const marketApi = {
+  overview: () => api.get('/market/overview'),
 }

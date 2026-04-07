@@ -1,174 +1,162 @@
 <template>
   <div class="home">
-    <!-- 关键指标卡片 -->
+    <!-- 持仓关键指标 -->
     <el-row :gutter="16" class="home__cards">
       <el-col :span="6">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
-              <el-icon><Coincedent /></el-icon>
-              <span>总市值</span>
-            </div>
-          </template>
-          <div class="card-value">
-            ¥ {{ snapshot ? snapshot.total_market_value.toFixed(2) : '0.00' }}
+        <div class="metric-card">
+          <div class="metric-card__label">
+            <span class="metric-card__dot" style="background:#409EFF"></span>
+            <span>总市值</span>
           </div>
-          <div class="card-desc">持仓快照</div>
-        </el-card>
-      </el-col>
-
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
-              <el-icon><TrendCharts /></el-icon>
-              <span>浮盈/亏</span>
-            </div>
-          </template>
-          <div class="card-value" :class="floatProfit >= 0 ? 'profit' : 'loss'">
-            {{ floatProfit >= 0 ? '+' : '' }}{{ floatProfit.toFixed(2) }}
+          <div class="metric-card__value">
+            {{ snapshot ? Number(snapshot.total_market_value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—' }}
           </div>
-          <div class="card-desc">
-            <span :class="floatProfitRatio >= 0 ? 'profit' : 'loss'">
-              {{ floatProfitRatio >= 0 ? '+' : '' }}{{ floatProfitRatio.toFixed(2) }}%
-            </span>
-          </div>
-        </el-card>
-      </el-col>
-
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
-              <el-icon><Wallet /></el-icon>
-              <span>现金比例</span>
-            </div>
-          </template>
-          <div class="card-value">{{ snapshot ? snapshot.cash_ratio.toFixed(1) : '0.0' }}%</div>
-          <div class="card-desc">
-            <el-progress
-              :percentage="snapshot ? (100 - snapshot.cash_ratio) : 0"
-              :stroke-width="6"
-              :show-text="false"
-              color="#409EFF"
-            />
-          </div>
-        </el-card>
-      </el-col>
-
-      <el-col :span="6">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
-              <el-icon><SetUp /></el-icon>
-              <span>持仓数量</span>
-            </div>
-          </template>
-          <div class="card-value">{{ snapshot ? snapshot.position_count : 0 }} 只</div>
-          <div class="card-desc">建议 5-8 只</div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- 系统状态 & 快速操作 -->
-    <el-row :gutter="16" class="home__section">
-      <el-col :span="12">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
-              <el-icon><Monitor /></el-icon>
-              <span>系统状态</span>
-            </div>
-          </template>
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="后端服务">
-              <el-tag :type="appStore.systemReady ? 'success' : 'danger'" size="small">
-                {{ appStore.systemReady ? '在线' : '离线' }}
-              </el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item label="数据目录">
-              <el-tag :type="appStore.dataDirOk ? 'success' : 'danger'" size="small">
-                {{ appStore.dataDirOk ? '就绪' : '异常' }}
-              </el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item label="规则库">
-              <el-tag type="info" size="small">11 条默认规则</el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item label="数据存储">
-              <el-tag type="info" size="small">DuckDB + Parquet</el-tag>
-            </el-descriptions-item>
-          </el-descriptions>
-        </el-card>
-      </el-col>
-
-      <el-col :span="12">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
-              <el-icon><Lightning /></el-icon>
-              <span>快速操作</span>
-            </div>
-          </template>
-          <div class="quick-actions">
-            <el-button type="primary" @click="$router.push('/portfolio')">
-              <el-icon><Coincedent /></el-icon>
-              持仓管理
-            </el-button>
-            <el-button type="success" @click="$router.push('/trades')">
-              <el-icon><Swap /></el-icon>
-              调仓记录
-            </el-button>
-            <el-button type="warning" @click="$router.push('/thinking')">
-              <el-icon><ChatDotRound /></el-icon>
-              盘中思考
-            </el-button>
-            <el-button @click="$router.push('/rules')">
-              <el-icon><SetUp /></el-icon>
-              规则库
-            </el-button>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- 持仓列表预览 -->
-    <el-card v-if="positions.length > 0" shadow="hover" class="home__positions">
-      <template #header>
-        <div class="card-header">
-          <el-icon><Coincedent /></el-icon>
-          <span>持仓预览</span>
-          <el-button type="text" @click="$router.push('/portfolio')" style="margin-left: auto">
-            查看全部 →
-          </el-button>
+          <div class="metric-card__sub">持仓快照</div>
         </div>
-      </template>
-      <el-table :data="positions.slice(0, 5)" stripe size="small">
-        <el-table-column prop="ticker" label="代码" width="110" />
-        <el-table-column prop="name" label="名称" width="100" />
-        <el-table-column prop="quantity" label="数量" width="90" align="right" />
-        <el-table-column prop="cost_price" label="成本" width="90" align="right">
-          <template #default="{ row }">{{ row.cost_price.toFixed(2) }}</template>
-        </el-table-column>
-        <el-table-column prop="current_price" label="现价" width="90" align="right">
-          <template #default="{ row }">{{ row.current_price.toFixed(2) }}</template>
-        </el-table-column>
-        <el-table-column prop="float_profit" label="浮盈" align="right">
-          <template #default="{ row }">
-            <span :class="row.float_profit >= 0 ? 'profit' : 'loss'">
-              {{ row.float_profit >= 0 ? '+' : '' }}{{ row.float_profit.toFixed(2) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="position_ratio" label="占比" width="100" align="right">
-          <template #default="{ row }">{{ row.position_ratio.toFixed(1) }}%</template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+      </el-col>
 
-    <!-- 无数据提示 -->
-    <el-empty v-if="!positions.length && appStore.systemReady" description="暂无持仓数据，请先上传持仓">
-      <el-button type="primary" @click="$router.push('/portfolio')">去上传</el-button>
-    </el-empty>
+      <el-col :span="6">
+        <div class="metric-card">
+          <div class="metric-card__label">
+            <span class="metric-card__dot" :style="{ background: floatProfit >= 0 ? '#e53935' : '#43a047' }"></span>
+            <span>浮盈/亏</span>
+          </div>
+          <div class="metric-card__value" :class="floatProfit >= 0 ? 'profit' : 'loss'">
+            {{ floatProfit >= 0 ? '+' : '' }}{{ Number(floatProfit).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}
+          </div>
+          <div class="metric-card__sub" :class="floatProfitRatio >= 0 ? 'profit' : 'loss'">
+            {{ floatProfitRatio >= 0 ? '+' : '' }}{{ floatProfitRatio.toFixed(2) }}%
+          </div>
+        </div>
+      </el-col>
+
+      <el-col :span="6">
+        <div class="metric-card">
+          <div class="metric-card__label">
+            <span class="metric-card__dot" style="background:#67C23A"></span>
+            <span>持仓占比</span>
+          </div>
+          <div class="metric-card__value">
+            {{ snapshot ? (100 - snapshot.cash_ratio).toFixed(1) : '0.0' }}%
+          </div>
+          <div class="metric-card__sub">现金 {{ snapshot ? snapshot.cash_ratio.toFixed(1) : '0.0' }}%</div>
+        </div>
+      </el-col>
+
+      <el-col :span="6">
+        <div class="metric-card">
+          <div class="metric-card__label">
+            <span class="metric-card__dot" style="background:#E6A23C"></span>
+            <span>持仓数量</span>
+          </div>
+          <div class="metric-card__value">
+            {{ snapshot ? snapshot.position_count : 0 }}
+            <span class="metric-card__unit">只</span>
+          </div>
+          <div class="metric-card__sub">建议 5-8 只</div>
+        </div>
+      </el-col>
+    </el-row>
+
+    <!-- 市场概览 -->
+    <div class="section-title">
+      <span>市场概览</span>
+      <div class="section-title__right">
+        <span class="section-title__date" v-if="marketStore.updatedAt">
+          更新于 {{ marketStore.updatedAt.replace('T', ' ').slice(0, 19) }}
+        </span>
+        <el-button size="small" :loading="marketStore.loading" @click="marketStore.loadOverview()">
+          刷新
+        </el-button>
+      </div>
+    </div>
+
+    <el-row :gutter="16" class="home__market" v-loading="marketStore.loading">
+      <!-- 成交额 -->
+      <el-col :span="6">
+        <div class="metric-card">
+          <div class="metric-card__label">
+            <span class="metric-card__dot" style="background:#7C3AED"></span>
+            <span>A股成交额</span>
+          </div>
+          <div class="metric-card__value">
+            {{ marketStore.volume && marketStore.volume.amount > 0
+                ? Number(marketStore.volume.amount).toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+                : '—' }}
+            <span class="metric-card__unit" v-if="marketStore.volume && marketStore.volume.amount > 0">亿</span>
+          </div>
+          <div class="metric-card__sub" v-if="marketStore.volume && marketStore.volume.change_pct !== 0"
+               :class="marketStore.volume.change_pct >= 0 ? 'profit' : 'loss'">
+            {{ marketStore.volume.change_pct >= 0 ? '↑' : '↓' }}
+            {{ Math.abs(marketStore.volume.change_pct).toFixed(1) }}% 较昨日
+          </div>
+          <div class="metric-card__sub" v-else>—</div>
+        </div>
+      </el-col>
+
+      <!-- 涨跌停 -->
+      <el-col :span="6">
+        <div class="metric-card">
+          <div class="metric-card__label">
+            <span class="metric-card__dot" style="background:#E6A23C"></span>
+            <span>涨跌停家数</span>
+          </div>
+          <div class="metric-card__value">
+            <span class="zt-count">
+              {{ marketStore.ztDt ? marketStore.ztDt.zt_count : '—' }}
+              <span class="zt-label">涨停</span>
+            </span>
+            <span class="dt-count">
+              {{ marketStore.ztDt ? marketStore.ztDt.dt_count : '—' }}
+              <span class="dt-label">跌停</span>
+            </span>
+          </div>
+          <div class="metric-card__sub">上一交易日</div>
+        </div>
+      </el-col>
+
+      <!-- 融资余额 -->
+      <el-col :span="6">
+        <div class="metric-card">
+          <div class="metric-card__label">
+            <span class="metric-card__dot" :style="{ background: '#409EFF' }"></span>
+            <span>融资余额</span>
+          </div>
+          <div class="metric-card__value">
+            {{ marketStore.margin ? Number(marketStore.margin.balance).toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) : '—' }}
+            <span class="metric-card__unit" v-if="marketStore.margin">亿</span>
+          </div>
+          <div class="metric-card__sub" v-if="marketStore.margin"
+               :class="marketStore.margin.change_pct >= 0 ? 'profit' : 'loss'">
+            {{ marketStore.margin.change_pct >= 0 ? '↑' : '↓' }}
+            {{ Math.abs(marketStore.margin.change_pct).toFixed(2) }}% 较前日
+          </div>
+          <div class="metric-card__sub" v-else>—</div>
+        </div>
+      </el-col>
+
+      <!-- 散户情绪 -->
+      <el-col :span="6">
+        <div class="metric-card">
+          <div class="metric-card__label">
+            <span class="metric-card__dot" :style="{
+              background: marketStore.breadth && marketStore.breadth.signal === '做多情绪' ? '#e53935'
+                        : marketStore.breadth && marketStore.breadth.signal === '去杠杆偏空' ? '#43a047'
+                        : '#909399'
+            }"></span>
+            <span>散户情绪</span>
+          </div>
+          <div class="metric-card__value">
+            {{ marketStore.breadth ? marketStore.breadth.signal : '—' }}
+          </div>
+          <div class="metric-card__sub" v-if="marketStore.breadth">
+            融资余额 {{ marketStore.breadth.rzye >= 0 ? '↑' : '↓' }}
+            {{ Math.abs(marketStore.breadth.change_pct).toFixed(2) }}%（近5日）
+          </div>
+          <div class="metric-card__sub" v-else>—</div>
+        </div>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
@@ -176,11 +164,13 @@
 import { computed, onMounted } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { usePortfolioStore } from '@/stores/portfolio'
+import { useMarketStore } from '@/stores/market'
 import { storeToRefs } from 'pinia'
 
 const appStore = useAppStore()
 const portfolioStore = usePortfolioStore()
-const { snapshot, positions } = storeToRefs(portfolioStore)
+const marketStore = useMarketStore()
+const { snapshot } = storeToRefs(portfolioStore)
 
 const floatProfit = computed(() => snapshot.value?.total_float_profit ?? 0)
 const floatProfitRatio = computed(() => snapshot.value?.float_profit_ratio ?? 0)
@@ -199,51 +189,121 @@ onMounted(async () => {
 }
 
 .home__cards {
+  margin-bottom: 20px;
+}
+
+.home__market {
   margin-bottom: 16px;
 }
 
-.card-header {
+// ── Section Title ──────────────────────────────────────────────
+.section-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-weight: 600;
+  justify-content: space-between;
   font-size: 14px;
-}
-
-.card-value {
-  font-size: 28px;
-  font-weight: 700;
+  font-weight: 600;
   color: #303133;
-  margin: 12px 0 6px;
-  font-variant-numeric: tabular-nums;
+  margin-bottom: 12px;
+  padding: 0 2px;
 
-  &.profit { color: #e53935; }
-  &.loss { color: #43a047; }
+  &__right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__date {
+    font-size: 12px;
+    font-weight: 400;
+    color: #C0C4CC;
+  }
 }
 
-.card-desc {
-  color: #909399;
-  font-size: 13px;
-
-  .profit { color: #e53935; }
-  .loss { color: #43a047; }
-}
-
-.home__section {
-  margin-bottom: 16px;
-}
-
-.quick-actions {
+// ── Metric Card ───────────────────────────────────────────────
+.metric-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 18px 20px 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  border: 1px solid #F0F2F5;
+  transition: box-shadow 0.2s, transform 0.2s;
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 8px 0;
+  flex-direction: column;
+  gap: 0;
+  min-height: 120px;
+
+  &:hover {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+    transform: translateY(-1px);
+  }
+
+  &__label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #606266;
+    margin-bottom: 12px;
+  }
+
+  &__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  &__value {
+    font-size: 26px;
+    font-weight: 700;
+    color: #1D2129;
+    line-height: 1.1;
+    margin-bottom: 6px;
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+  }
+
+  &__unit {
+    font-size: 14px;
+    font-weight: 400;
+    color: #909399;
+    margin-left: 2px;
+  }
+
+  &__sub {
+    font-size: 12px;
+    color: #909399;
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
 }
 
-.home__positions {
-  margin-top: 16px;
+// ── ZT/DT counts ───────────────────────────────────────────────
+.zt-count, .dt-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
+
+.zt-label, .dt-label {
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+.zt-label { color: #e53935; }
+.dt-label { color: #43a047; }
+.dt-count { margin-left: 12px; }
 
 .profit { color: #e53935; }
-.loss { color: #43a047; }
+.loss   { color: #43a047; }
 </style>

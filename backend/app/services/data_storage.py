@@ -59,6 +59,10 @@ class DataStorage:
         return cls._parquet_path(settings.USER_DIR, settings.WEAKNESS_FILE)
 
     @classmethod
+    def plans_path(cls) -> Path:
+        return cls._parquet_path(settings.USER_DIR, settings.PLAN_FILE)
+
+    @classmethod
     def thinking_path(cls) -> Path:
         return cls._parquet_path(settings.USER_DIR, settings.THINKING_FILE)
 
@@ -174,6 +178,44 @@ class DataStorage:
     def write_weakness_profile(cls, df: pd.DataFrame) -> None:
         """写入弱点画像"""
         cls.write_parquet(cls.weakness_path(), df)
+
+    # ── Portfolio Plans ─────────────────────────────────────────────────
+
+    @classmethod
+    def read_plans(cls, ticker: Optional[str] = None) -> pd.DataFrame:
+        """读取个股计划，可选按 ticker 过滤，返回 plan_date 为 ISO 字符串"""
+        df = cls.read_parquet(cls.plans_path())
+        if df.empty:
+            return df
+        # plan_date stored as ISO string, return as-is
+        if ticker:
+            df = df[df["ticker"] == ticker]
+        return df.sort_values("plan_date", ascending=False)
+
+    @classmethod
+    def append_plan(cls, plan_record: dict) -> int:
+        """追加一条计划，返回自动生成的ID（plan_date/created_at 统一存为 ISO 字符串）"""
+        df = cls.read_plans()
+        new_id = (int(df["id"].max()) if not df.empty and "id" in df.columns and len(df) > 0 else 0) + 1
+        record = {**plan_record, "id": new_id}
+        for col in ("plan_date", "created_at"):
+            val = record.get(col)
+            if isinstance(val, (date, datetime)):
+                record[col] = val.isoformat()
+            elif val:
+                record[col] = str(val)
+        new_df = pd.DataFrame([record])
+        cls.append_parquet(cls.plans_path(), new_df)
+        return int(new_id)
+
+    @classmethod
+    def delete_plan(cls, plan_id: int) -> None:
+        """删除指定计划"""
+        df = cls.read_plans()
+        if df.empty or "id" not in df.columns or plan_id not in df["id"].values:
+            return
+        df = df[df["id"] != plan_id]
+        cls.write_parquet(cls.plans_path(), df)
 
     # ── Thinking ─────────────────────────────────────────────────────────
 

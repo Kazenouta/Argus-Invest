@@ -86,8 +86,8 @@
 
       <!-- ── 调仓记录列表 ────────────────────────────────── -->
       <el-table
-        v-if="!tableLoading && trades.length > 0"
-        :data="trades"
+        v-if="!tableLoading && paginatedTrades.length > 0"
+        :data="paginatedTrades"
         stripe
         size="small"
         style="margin-top: 12px"
@@ -128,7 +128,18 @@
         <div style="margin-top:8px">加载中…</div>
       </div>
 
-      <el-empty v-else-if="!tableLoading && trades.length === 0" description="暂无调仓记录，请上传成交文件" />
+      <el-empty v-else-if="!tableLoading && paginatedTrades.length === 0" description="暂无调仓记录，请上传成交文件" />
+
+      <div v-if="!tableLoading && trades.length > 0" style="margin-top: 16px; display: flex; justify-content: flex-end">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="trades.length"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+        />
+      </div>
     </el-card>
 
     <!-- ── 逻辑编辑弹窗 ─────────────────────────────────── -->
@@ -178,6 +189,13 @@ const uploadRef    = ref()
 const fileList     = ref<{ name: string; raw?: File }[]>([])
 const queryRange   = ref<string[] | null>(null)
 const queryTicker  = ref('')
+const currentPage  = ref(1)
+const pageSize     = ref(10)
+
+const paginatedTrades = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return trades.value.slice(start, start + pageSize.value)
+})
 
 // ── 弹窗状态 ─────────────────────────────────────────────
 const dialogVisible = ref(false)
@@ -187,6 +205,7 @@ const dialogReason  = ref('')
 
 // ── 加载数据 ─────────────────────────────────────────────
 async function loadTrades() {
+  currentPage.value = 1
   tableLoading.value = true
   try {
     const [start, end] = queryRange.value || []
