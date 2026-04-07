@@ -269,8 +269,6 @@ onMounted(async () => {
   if (appStore.systemReady) {
     await portfolioStore.loadPortfolio()
   }
-  // 加载 AI 市场概览
-  await marketStore.loadOverview()
 })
 </script>
 
