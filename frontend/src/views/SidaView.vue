@@ -2,13 +2,17 @@
   <div class="sida-section">
     <div class="section-title">
       <div class="section-title__left">
-        <span>🧠 斯大最新观点</span>
+        <span class="sida-star">★</span>
+        <span>斯大最新观点</span>
         <el-tag size="small" type="info" style="margin-left: 8px">斯托伯的天空</el-tag>
       </div>
       <div class="section-title__right">
-        <span class="section-title__date">基于 2026-04-03 周报</span>
+        <span class="section-title__date">基于 {{ latestFileName }}</span>
         <el-button size="small" text type="primary" @click="showDetail = !showDetail">
           {{ showDetail ? '收起详情' : '展开详情' }}
+        </el-button>
+        <el-button size="small" type="primary" @click="showUpload = true">
+          <el-icon><Upload /></el-icon> 上传文件
         </el-button>
       </div>
     </div>
@@ -97,15 +101,72 @@
     <div class="sida-footer">
       ⚠️ 以上为斯大个人观点摘录，仅供参考，不构成投资建议
     </div>
+
+    <!-- 上传对话框 -->
+    <el-dialog
+      v-model="showUpload"
+      title="上传斯大周报文件"
+      width="480px"
+      :append-to-body="true"
+    >
+      <el-alert type="info" :closable="false" style="margin-bottom: 14px">
+        <template #title>上传说明：将斯大的新一期周报 HTML 文件上传，系统自动解析并更新首页观点展示。</template>
+      </el-alert>
+
+      <el-form label-width="80px" size="default">
+        <el-form-item label="选择文件">
+          <el-upload
+            ref="uploadRef"
+            :auto-upload="false"
+            :limit="1"
+            accept=".html,.htm"
+            :on-change="onFileChange"
+            :on-remove="onFileRemove"
+            :file-list="uploadFileList"
+            style="width: 100%"
+          >
+            <el-button type="primary" plain>
+              <el-icon><Upload /></el-icon>&nbsp;选择周报 HTML 文件
+            </el-button>
+            <template #tip>
+              <div style="font-size: 12px; color: #aaa; margin-top: 4px">
+                支持 .html 文件，系统会自动识别最新一期并解析
+              </div>
+            </template>
+          </el-upload>
+        </el-form-item>
+
+        <el-form-item v-if="uploadFileList.length > 0">
+          <el-button type="primary" :loading="uploading" :disabled="uploading" @click="submitUpload">
+            确认上传并解析
+          </el-button>
+          <el-button @click="resetUpload">重置</el-button>
+        </el-form-item>
+      </el-form>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Upload } from '@element-plus/icons-vue'
 
 const showDetail = ref(false)
+const showUpload = ref(false)
+const uploadRef = ref()
+const uploadFileList = ref<{ name: string; raw?: File }[]>([])
+const uploading = ref(false)
+
+const latestFileName = computed(() => {
+  // 从文件列表中取最新日期的文件名
+  return latestView._meta?.sourceFile || '2026-04-03 周报'
+})
 
 const latestView = {
+  _meta: {
+    sourceFile: '2026-04-03 周总结——最值钱的就是风险本身'
+  },
   coreThinking: '风险才是投资里最重要最值钱的东西。长期做交易的投资者逐渐会明白，我们所有的收益都来自于风险本身。',
   marketViews: {
     '大盘': {
@@ -178,6 +239,43 @@ function signalTagType(signal: string) {
   if (signal.includes('偏空') || signal.includes('谨慎')) return 'warning'
   return 'info'
 }
+
+// ── 上传相关 ──────────────────────────────────────────────────
+function onFileChange(file: { name: string; raw?: File }) {
+  if (!file.raw) return
+  uploadFileList.value = [{ name: file.name, raw: file.raw }]
+}
+function onFileRemove() {
+  uploadFileList.value = []
+}
+
+async function submitUpload() {
+  const raw = uploadFileList.value[0]?.raw
+  if (!raw) { ElMessage.error('请先选择文件'); return }
+  const formData = new FormData()
+  formData.append('file', raw)
+  formData.append('author', '斯托伯的天空')
+  uploading.value = true
+  try {
+    const res = await fetch('/api/sida/upload', { method: 'POST', body: formData })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.detail || '上传失败')
+    ElMessage.success(`上传成功：${data.filename}，已解析并更新观点`)
+    uploadFileList.value = []
+    uploadRef.value?.clearFiles()
+    showUpload.value = false
+    // 触发父组件刷新（如果有）
+  } catch (err: unknown) {
+    ElMessage.error((err as Error).message || '上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+function resetUpload() {
+  uploadFileList.value = []
+  uploadRef.value?.clearFiles()
+}
 </script>
 
 <style scoped lang="scss">
@@ -211,6 +309,14 @@ function signalTagType(signal: string) {
     font-weight: 400;
     color: #C0C4CC;
   }
+}
+
+.sida-star {
+  color: #FFD700;
+  font-size: 18px;
+  margin-right: 4px;
+  text-shadow: 0 0 2px rgba(255, 215, 0, 0.6);
+  line-height: 1;
 }
 
 // Banner
