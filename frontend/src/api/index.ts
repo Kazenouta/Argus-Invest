@@ -107,4 +107,5 @@ export const monitorApi = {
 
 export const marketApi = {
   overview: () => api.get('/market/overview'),
+  aiOverview: () => api.get('/market/ai-overview'),
 }
