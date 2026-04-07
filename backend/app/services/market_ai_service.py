@@ -18,27 +18,15 @@ from datetime import datetime, date, timedelta
 from typing import Any
 
 
-# ── 环境配置 ────────────────────────────────────────────────────────────────
+# ── 环境配置（优先用系统环境变量）─────────────────────────────────────────────
 
 def _get_minimax_key() -> str:
-    """优先从 .env 读取 MiniMax API Key"""
-    # 尝试从 .env 文件读取
-    env_path = os.path.join(os.path.dirname(__file__), '../../.env')
-    if os.path.exists(env_path):
-        for line in open(env_path, encoding='utf-8'):
-            line = line.strip()
-            if line.startswith('MINIMAX_API_KEY='):
-                return line.split('=', 1)[1].strip().strip('"').strip("'")
+    """从系统环境变量读取 MiniMax API Key"""
     return os.environ.get('MINIMAX_API_KEY', '')
 
 
 def _get_base_url() -> str:
-    env_path = os.path.join(os.path.dirname(__file__), '../../.env')
-    if os.path.exists(env_path):
-        for line in open(env_path, encoding='utf-8'):
-            line = line.strip()
-            if line.startswith('MINIMAX_API_BASE='):
-                return line.split('=', 1)[1].strip().strip('"').strip("'")
+    """从系统环境变量读取 MiniMax API Base"""
     return os.environ.get('MINIMAX_API_BASE', 'https://api.minimax.chat/v1')
 
 
