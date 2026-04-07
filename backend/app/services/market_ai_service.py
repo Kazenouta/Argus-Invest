@@ -11,8 +11,9 @@ Market AI overview service.
 """
 import os
 import json
+import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Union
 
 import httpx
 
@@ -168,7 +169,7 @@ Step 6：用 web_search 搜索「A股行业主力资金流出排名 Top3 近5日
         return _error_result(f"请求异常：{str(e)}")
 
 
-def _parse_ai_json(content: str) -> dict[str, Any] | None:
+def _parse_ai_json(content: str) -> Union[dict[str, Any], None]:
     """从 AI 返回内容中提取 JSON"""
     import re
 
