@@ -157,6 +157,9 @@
         </div>
       </el-col>
     </el-row>
+
+    <!-- 斯大最新观点 -->
+    <SidaView />
   </div>
 </template>
 
@@ -166,6 +169,7 @@ import { useAppStore } from '@/stores/app'
 import { usePortfolioStore } from '@/stores/portfolio'
 import { useMarketStore } from '@/stores/market'
 import { storeToRefs } from 'pinia'
+import SidaView from './SidaView.vue'
 
 const appStore = useAppStore()
 const portfolioStore = usePortfolioStore()
