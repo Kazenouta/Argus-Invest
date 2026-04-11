@@ -281,3 +281,81 @@ class DataStorage:
         new_df = pd.DataFrame([record_with_id])
         cls.append_parquet(cls.thinking_path(), new_df)
         return int(new_id)
+
+    # ── Market AI Overview Cache ───────────────────────────────────────
+
+    @classmethod
+    def market_ai_cache_path(cls) -> Path:
+        return cls._parquet_path(settings.USER_DIR, "market_ai_cache.parquet")
+
+    @classmethod
+    def save_market_ai_cache(cls, data: dict, updated_at: str) -> None:
+        """保存 AI 市场概览缓存（覆盖写入）"""
+        df = pd.DataFrame([{**data, "cached_at": updated_at}])
+        cls.write_parquet(cls.market_ai_cache_path(), df)
+
+    @classmethod
+    def load_market_ai_cache(cls) -> Optional[dict]:
+        """加载 AI 市场概览缓存，无缓存则返回 None（numpy类型转Python原生）"""
+        path = cls.market_ai_cache_path()
+        if not path.exists():
+            return None
+        df = cls.read_parquet(path)
+        if df is None or df.empty:
+            return None
+        row = df.iloc[0].to_dict()
+        row.pop("cached_at", None)
+
+        def _to_native(obj):
+            import numpy as np
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, dict):
+                return {k: _to_native(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_to_native(x) for x in obj]
+            return obj
+
+        return _to_native(row)
+
+    # ── Market Overview Cache (non-AI) ─────────────────────────────────
+
+    @classmethod
+    def market_overview_cache_path(cls) -> Path:
+        return cls._parquet_path(settings.USER_DIR, "market_overview_cache.parquet")
+
+    @classmethod
+    def save_market_overview_cache(cls, data: dict) -> None:
+        """保存普通市场概览缓存（覆盖写入）"""
+        df = pd.DataFrame([data])
+        cls.write_parquet(cls.market_overview_cache_path(), df)
+
+    @classmethod
+    def load_market_overview_cache(cls) -> Optional[dict]:
+        """加载普通市场概览缓存，无缓存则返回 None（numpy类型转Python原生）"""
+        path = cls.market_overview_cache_path()
+        if not path.exists():
+            return None
+        df = cls.read_parquet(path)
+        if df is None or df.empty:
+            return None
+
+        def _to_native(obj):
+            import numpy as np
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, dict):
+                return {k: _to_native(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_to_native(x) for x in obj]
+            return obj
+
+        return _to_native(df.iloc[0].to_dict())

@@ -49,7 +49,7 @@ def _get_minimax_key() -> str:
 # ── Step 1：AkShare 抓取真实数据 ────────────────────────────────────────────
 
 def fetch_market_data() -> dict[str, Any]:
-    """用 AkShare 抓取真实市场数据（有超时保护，线程方式实现）"""
+    """用 AkShare + Tushare 抓取真实市场数据（有超时保护，线程方式实现）"""
     import threading
     result: dict[str, Any] = {
         "成交额亿": None,
@@ -62,40 +62,104 @@ def fetch_market_data() -> dict[str, Any]:
         "资金流出行业": [],
     }
     _error_msg = []
+    _sh_daily = [None]  # 用list包装以便在内部赋值后外部可读取
+    _prev_date = [None]
+
+    def _get_prev_trading_date(trade_date_str: str, pro_api) -> str:
+        """Tushare日期格式：YYYYMMDD，找前一交易日"""
+        import datetime
+        d = datetime.date(int(trade_date_str[:4]), int(trade_date_str[4:6]), int(trade_date_str[6:8]))
+        for _ in range(1, 8):
+            d2 = d - datetime.timedelta(days=_)
+            ds = d2.strftime('%Y%m%d')
+            df = pro_api.daily(trade_date=ds)
+            if df is not None and not df.empty:
+                return ds
+        return trade_date_str
 
     def _fetch():
         try:
             import akshare as ak
+            import tushare as ts
 
-            # 1. 成交额：BaoStock 直连
+            token = os.environ.get('TUSHARE_TOKEN', '').strip()
+            if not token:
+                import pathlib
+                profile_path = pathlib.Path.home() / '.openclaw/agents/main/agent/auth-profiles.json'
+                if profile_path.exists():
+                    try:
+                        data = json.loads(profile_path.read_text(encoding='utf-8'))
+                        profiles = data.get('profiles', {})
+                        for name in ['tushare:pro', 'tushare']:
+                            if name in profiles:
+                                token = profiles[name].get('key', '').strip()
+                                if token:
+                                    break
+                    except Exception:
+                        pass
+            if not token:
+                token = '703fd07f16a5c9e171961ad1a980d8b90793243b78b1ba6b0d92791d'
+            pro_local = ts.pro_api(token)
+
+            # 1. 成交额：Tushare pro.daily 全市场汇总（amount单位=百万元，/100=亿元）
             try:
-                sh_daily = ak.stock_zh_index_daily(symbol="sh000001").sort_values("date")
-                sz_daily = ak.stock_zh_index_daily(symbol="sz399001").sort_values("date")
-                today_sh = sh_daily.iloc[-1]
-                prev_sh = sh_daily.iloc[-2]
-                today_sz = sz_daily.iloc[-1]
-                prev_sz = sz_daily.iloc[-2]
-
-                cap_df = ak.macro_china_stock_market_cap().sort_values("数据日期", ascending=False)
-                row = cap_df.iloc[1]
-                sh_avg = float(row["成交金额-上海"]) * 1e8 / (float(row["成交量-上海"]) * 1e8) if float(row["成交量-上海"]) > 0 else 14.5
-                sz_avg = float(row["成交金额-深圳"]) * 1e8 / (float(row["成交量-深圳"]) * 1e8) if float(row["成交量-深圳"]) > 0 else 17.2
-
-                result["成交额亿"] = round(float(today_sh["volume"]) * sh_avg / 1e8 + float(today_sz["volume"]) * sz_avg / 1e8, 0)
-                result["昨日成交额亿"] = round(float(prev_sh["volume"]) * sh_avg / 1e8 + float(prev_sz["volume"]) * sz_avg / 1e8, 0)
+                import datetime
+                today_str = datetime.date.today().strftime('%Y%m%d')
+                today_df = pro_local.daily(trade_date=today_str)
+                if today_df is None or today_df.empty:
+                    # 尝试用 BaoStock 找最近交易日
+                    sh_d = ak.stock_zh_index_daily(symbol='sh000001').sort_values('date')
+                    latest = sh_d.iloc[-1]['date'].strftime('%Y%m%d')
+                    today_str = latest
+                    today_df = pro_local.daily(trade_date=today_str)
+                if today_df is not None and not today_df.empty:
+                    # amount 单位=千元(1e3元), vol=手(100股)
+                    # amount_sum千元 / 1e5 = 亿元
+                    today_amount_千元 = today_df['amount'].sum()
+                    result['成交额亿'] = round(today_amount_千元 / 1e5, 0)
+                    # 昨日
+                    prev_str = _get_prev_trading_date(today_str, pro_local)
+                    _prev_date[0] = prev_str
+                    prev_df = pro_local.daily(trade_date=prev_str)
+                    if prev_df is not None and not prev_df.empty:
+                        prev_amount_千元 = prev_df['amount'].sum()
+                        result['昨日成交额亿'] = round(prev_amount_千元 / 1e5, 0)
+                    # 保存 sh_daily 供后面涨跌停用
+                    sh_d = ak.stock_zh_index_daily(symbol='sh000001').sort_values('date')
+                    _sh_daily[0] = sh_d
+                else:
+                    _error_msg.append('成交额: Tushare返回空')
             except Exception as e:
-                _error_msg.append(f"成交额: {e}")
+                _error_msg.append(f'成交额: {e}')
+                # 备用：BaoStock
+                try:
+                    sh_d = ak.stock_zh_index_daily(symbol='sh000001').sort_values('date')
+                    sz_d = ak.stock_zh_index_daily(symbol='sz399001').sort_values('date')
+                    today_sh = sh_d.iloc[-1]
+                    prev_sh = sh_d.iloc[-2]
+                    today_sz = sz_d.iloc[-1]
+                    prev_sz = sz_d.iloc[-2]
+                    cap_df = ak.macro_china_stock_market_cap().sort_values('数据日期', ascending=False)
+                    row = cap_df.iloc[1]
+                    sh_avg = float(row['成交金额-上海']) * 1e8 / (float(row['成交量-上海']) * 1e8) if float(row['成交量-上海']) > 0 else 14.5
+                    sz_avg = float(row['成交金额-深圳']) * 1e8 / (float(row['成交量-深圳']) * 1e8) if float(row['成交量-深圳']) > 0 else 17.2
+                    result['成交额亿'] = round(float(today_sh['volume']) * sh_avg / 1e8 + float(today_sz['volume']) * sz_avg / 1e8, 0)
+                    result['昨日成交额亿'] = round(float(prev_sh['volume']) * sh_avg / 1e8 + float(prev_sz['volume']) * sz_avg / 1e8, 0)
+                    _sh_daily[0] = sh_d
+                except Exception as e2:
+                    _error_msg.append(f'成交额(备用): {e2}')
 
             # 2. 涨跌停
             try:
-                if sh_daily is not None:
-                    latest_date = sh_daily.iloc[-1]["date"].strftime("%Y%m%d")
+                sh_d = _sh_daily[0]
+                if sh_d is not None and not sh_d.empty:
+                    latest_date = sh_d.iloc[-1]['date'].strftime('%Y%m%d')
                     zt_df = ak.stock_zt_pool_em(date=latest_date)
-                    result["涨停家数"] = len(zt_df) if zt_df is not None and not zt_df.empty else 0
+                    result['涨停家数'] = len(zt_df) if zt_df is not None and not zt_df.empty else 0
                     dt_df = ak.stock_zt_pool_dtgc_em(date=latest_date)
-                    result["跌停家数"] = len(dt_df) if dt_df is not None and not dt_df.empty else 0
+                    result['跌停家数'] = len(dt_df) if dt_df is not None and not dt_df.empty else 0
             except Exception as e:
-                _error_msg.append(f"涨跌停: {e}")
+                _error_msg.append(f'涨跌停: {e}')
 
             # 3. 融资余额
             try:

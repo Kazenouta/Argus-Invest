@@ -111,5 +111,7 @@ export const monitorApi = {
 
 export const marketApi = {
   overview: () => api.get('/market/overview'),
+  overviewCache: () => api.get('/market/overview/cache'),
   aiOverview: () => api.get('/market/ai-overview'),
+  aiOverviewCache: () => api.get('/market/ai-overview/cache'),
 }

@@ -99,8 +99,8 @@
             {{ marketStore.aiOverview.成交额?.value || '—' }}
           </div>
           <div class="metric-card__sub" :class="signalClass(marketStore.aiOverview.成交额?.信号)">
-            <span v-if="marketStore.aiOverview.成交额?.趋势描述">{{ marketStore.aiOverview.成交额.趋势描述 }}</span>
-            <span v-if="marketStore.aiOverview.成交额?.历史分位">｜历史分位：{{ marketStore.aiOverview.成交额.历史分位 }}</span>
+            <span v-if="marketStore.aiOverview.成交额?.信号">{{ marketStore.aiOverview.成交额.信号 }}</span>
+            <span v-if="marketStore.aiOverview.成交额?.历史分位"> · {{ marketStore.aiOverview.成交额.历史分位 }}</span>
           </div>
         </div>
       </el-col>
@@ -268,6 +268,7 @@ onMounted(async () => {
   await appStore.checkHealth()
   if (appStore.systemReady) {
     await portfolioStore.loadPortfolio()
+    marketStore.initOverview()
   }
 })
 </script>
@@ -283,6 +284,16 @@ onMounted(async () => {
 
 .home__market {
   margin-bottom: 16px;
+
+  // 让每列的卡片拉伸至等高
+  :deep(.el-col) {
+    display: flex;
+    flex-direction: column;
+
+    .metric-card {
+      flex: 1;
+    }
+  }
 }
 
 .home__market--row2 {

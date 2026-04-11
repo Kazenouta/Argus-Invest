@@ -30,6 +30,32 @@ export const useMarketStore = defineStore('market', () => {
   const updatedAt = ref<string | null>(null)
   const loading = ref(false)
 
+  // ── 初始化：页面加载时，只读缓存显示（不自动刷新）──────────────
+  async function initOverview() {
+    try {
+      const [aiRes, overviewRes] = await Promise.all([
+        marketApi.aiOverviewCache(),
+        marketApi.overviewCache(),
+      ])
+      if (aiRes.data) {
+        aiOverview.value = aiRes.data
+        updatedAt.value = aiRes.data?.更新时间 || null
+      }
+      if (overviewRes.data) {
+        const d = overviewRes.data
+        volume.value = d.market_volume || null
+        ztDt.value = d.zt_dt || null
+        margin.value = d.margin || null
+        northFlow.value = d.north_flow || null
+        breadth.value = d.breadth || null
+        updatedAt.value = d.updated_at || updatedAt.value
+      }
+    } catch {
+      // 缓存读取失败，静默继续
+    }
+  }
+
+  // ── 刷新：显式刷新时调用，显示 loading ──────────────────────────────
   async function loadOverview() {
     loading.value = true
     try {
@@ -42,7 +68,6 @@ export const useMarketStore = defineStore('market', () => {
   }
 
   async function loadOverviewLegacy() {
-    loading.value = true
     try {
       const res = await marketApi.overview()
       const d = res.data
@@ -52,13 +77,13 @@ export const useMarketStore = defineStore('market', () => {
       northFlow.value = d.north_flow
       breadth.value = d.breadth
       updatedAt.value = d.updated_at
-    } finally {
-      loading.value = false
+    } catch {
+      // 静默失败，数据来自缓存
     }
   }
 
   return {
     aiOverview, volume, ztDt, margin, northFlow, breadth, updatedAt, loading,
-    loadOverview, loadOverviewLegacy,
+    initOverview, loadOverview, loadOverviewLegacy,
   }
 })
