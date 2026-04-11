@@ -36,6 +36,9 @@ export const tradesApi = {
 
   delete: (tradeId: number) =>
     api.delete(`/trades/${tradeId}`),
+
+  analyze: (params?: { start_date?: string; end_date?: string }) =>
+    api.get('/trades/analyze', { params }),
 }
 
 // ── Weakness ────────────────────────────────────────────────────────────────
@@ -101,6 +104,7 @@ export const monitorApi = {
   rules: () => api.get('/monitor/rules'),
   check: () => api.post('/monitor/check'),
   events: () => api.get('/monitor/events'),
+  lastResult: () => api.get('/monitor/last-result'),
 }
 
 // ── Market Overview ─────────────────────────────────────────────────────────

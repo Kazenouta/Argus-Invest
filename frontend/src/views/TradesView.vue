@@ -36,6 +36,10 @@
               <el-icon><Upload /></el-icon>
               {{ showUpload ? '取消上传' : '上传调仓' }}
             </el-button>
+            <el-button type="warning" size="small" :loading="analyzing" @click="runAnalysis">
+              <el-icon><DataAnalysis /></el-icon>
+              分析调仓
+            </el-button>
           </div>
         </div>
       </template>
@@ -140,6 +144,98 @@
           background
         />
       </div>
+
+      <!-- ── 分析结果 ─────────────────────────────────────────── -->
+      <div v-if="analysisResult" class="analysis-panel">
+        <el-divider content-position="left">
+          <span style="font-size:14px;font-weight:600">调仓分析报告</span>
+          <span style="font-size:12px;color:#999;margin-left:8px">
+            共 {{ analysisResult.summary.total_trades }} 笔，
+            买入 {{ analysisResult.summary.total_buys }} 笔，
+            卖出 {{ analysisResult.summary.total_sells }} 笔
+          </span>
+        </el-divider>
+
+        <!-- 汇总指标 -->
+        <el-row :gutter="12" style="margin-bottom:16px">
+          <el-col :span="6">
+            <el-statistic title="买入后5日胜率" :value="analysisResult.summary.win_rate_5d ?? '—'">
+              <template #suffix v-if="analysisResult.summary.win_rate_5d != null">%</template>
+            </el-statistic>
+          </el-col>
+          <el-col :span="6">
+            <el-statistic title="买入后5日平均涨跌" :value="analysisResult.summary.avg_change_5d ?? '—'">
+              <template #suffix v-if="analysisResult.summary.avg_change_5d != null">%</template>
+            </el-statistic>
+          </el-col>
+          <el-col :span="6">
+            <el-statistic title="问题交易" :value="analysisResult.summary.total_issues">
+              <template #suffix> 笔</template>
+            </el-statistic>
+          </el-col>
+          <el-col :span="6">
+            <el-statistic title="无信号买入" :value="analysisResult.summary.no_signal_count">
+              <template #suffix> 笔</template>
+            </el-statistic>
+          </el-col>
+        </el-row>
+
+        <!-- 问题明细 -->
+        <div v-if="analysisResult.summary.total_issues > 0">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#e6a23c">问题交易</div>
+          <el-table :data="analysisResult.details.filter((d: any) => d.issue)" size="small" stripe>
+            <el-table-column prop="date" label="日期" width="110" />
+            <el-table-column prop="ticker" label="代码" width="110" />
+            <el-table-column prop="name" label="名称" width="120" />
+            <el-table-column prop="action" label="方向" width="70" align="center">
+              <template #default="{ row }">
+                <el-tag :type="row.action === 'buy' ? 'danger' : 'success'" size="small">
+                  {{ row.action === 'buy' ? '买入' : '卖出' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="price" label="价格" width="80" align="right">
+              <template #default="{ row }">{{ row.price?.toFixed(3) }}</template>
+            </el-table-column>
+            <el-table-column prop="issue" label="问题" min-width="220">
+              <template #default="{ row }">
+                <span :style="{ color: row.issue_level === 'error' ? '#f56c6c' : '#e6a23c' }">
+                  {{ row.issue }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="price_change_5d" label="5日涨跌" width="90" align="right">
+              <template #default="{ row }">
+                <span v-if="row.price_change_5d != null" :style="{ color: row.price_change_5d >= 0 ? '#67c23a' : '#f56c6c' }">
+                  {{ row.price_change_5d > 0 ? '+' : '' }}{{ row.price_change_5d }}%
+                </span>
+                <span v-else style="color:#999">—</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- 无信号买入 -->
+        <div v-if="analysisResult.summary.no_signal_count > 0" style="margin-top:16px">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:#909399">无信号依据的买入（建议补充逻辑）</div>
+          <el-table :data="analysisResult.details.filter((d: any) => d.action === 'buy' && !d.has_signal_before)" size="small" stripe>
+            <el-table-column prop="date" label="日期" width="110" />
+            <el-table-column prop="ticker" label="代码" width="110" />
+            <el-table-column prop="name" label="名称" width="120" />
+            <el-table-column prop="price" label="价格" width="80" align="right">
+              <template #default="{ row }">{{ row.price?.toFixed(3) }}</template>
+            </el-table-column>
+            <el-table-column prop="reason" label="操作逻辑" min-width="220">
+              <template #default="{ row }">
+                <span style="color:#909399;font-style:italic">{{ row.reason || '（未填写）' }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- 无问题 -->
+        <el-empty v-if="analysisResult.summary.total_issues === 0" description="未发现明显问题，继续保持" />
+      </div>
     </el-card>
 
     <!-- ── 逻辑编辑弹窗 ─────────────────────────────────── -->
@@ -177,7 +273,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Upload, Loading } from '@element-plus/icons-vue'
+import { Upload, Loading, DataAnalysis } from '@element-plus/icons-vue'
 import { tradesApi } from '@/api'
 import type { TradeRecord } from '@/types'
 
@@ -303,6 +399,26 @@ function fmtMoney(v?: number | null) {
   return v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+// ── 分析相关 ───────────────────────────────────────────────────
+const analyzing = ref(false)
+const analysisResult = ref<{
+  summary: Record<string, unknown>
+  details: Record<string, unknown>[]
+} | null>(null)
+
+async function runAnalysis() {
+  analyzing.value = true
+  analysisResult.value = null
+  try {
+    const res = await tradesApi.analyze()
+    analysisResult.value = res.data
+  } catch {
+    ElMessage.error('分析失败')
+  } finally {
+    analyzing.value = false
+  }
+}
+
 const tickerOptions = computed(() => {
   const map = new Map<string, { ticker: string; name: string }>()
   for (const t of trades.value) {
@@ -352,5 +468,12 @@ onMounted(loadTrades)
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.analysis-panel {
+  margin-top: 20px;
+  padding: 16px;
+  background: #fafafa;
+  border-radius: 6px;
 }
 </style>

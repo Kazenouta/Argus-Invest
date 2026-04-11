@@ -2,18 +2,17 @@
 Market overview service.
 
 获取大盘整体指标：成交额、涨跌停、融资余额、北向资金等。
-数据源优先级：
-  成交额 → BaoStock（直通，无代理）
-  涨跌停 → AkShare
+数据源：
+  成交额 → BaoStock（stock_zh_index_daily，直连） + macro_china_stock_market_cap 月度系数
+  涨跌停 → AkShare（eastmoney PULL，走 SOCKS5 代理）
   融资余额 → FinShare
-  北向资金 → FinShare HSGT
 """
 import os
 import json
 from datetime import datetime, date, timedelta
 
 
-# ── 工具：清除代理 ─────────────────────────────────────────────────────────
+# ── 工具：清除代理（httpx 用）───────────────────────────────────────────────
 
 def _clear_proxy():
     for k in ['http_proxy', 'https_proxy', 'all_proxy',
@@ -37,43 +36,105 @@ def _get_latest_trading_date(ref_date: date = None) -> date:
     return ref_date - timedelta(days=1)
 
 
+def _get_latest_prev_trading_date(base_date: date) -> date:
+    """以 base_date 为基准，往前找最近的上一个交易日。"""
+    for days_forward in range(1, 10):
+        d = base_date - timedelta(days=days_forward)
+        if d.weekday() >= 5:
+            continue
+        month_day = (d.month, d.day)
+        if month_day in [(1, 1), (5, 1), (10, 1), (10, 2), (10, 3)]:
+            continue
+        return d
+    return base_date - timedelta(days=1)
 
-# ── 大盘成交额（AkShare stock_zh_index_daily，无需代理）───────────────────
+
+
+# ── 大盘成交额（BaoStock 日线 + macro 月度系数，直连无代理）─────────────
+
+def _get_avg_price_coefficients() -> tuple[float, float]:
+    """
+    从 macro_china_stock_market_cap 月度数据推导沪市/深市平均股价系数。
+    返回 (沪市平均股价, 深市平均股价)，单位：元/股。
+    """
+    import pandas as pd
+    try:
+        import akshare as ak
+        cap_df = ak.macro_china_stock_market_cap().sort_values('数据日期', ascending=False)
+        for _, row in cap_df.iterrows():
+            sh_a = row['成交金额-上海']
+            sh_v = row['成交量-上海']
+            if pd.notna(sh_a) and pd.notna(sh_v):
+                sh_amount = float(sh_a)
+                sh_volume = float(sh_v)
+                sz_amount = float(row['成交金额-深圳'])
+                sz_volume = float(row['成交量-深圳'])
+                if sh_volume > 0 and sz_volume > 0:
+                    sh_avg = sh_amount * 1e8 / (sh_volume * 1e8)
+                    sz_avg = sz_amount * 1e8 / (sz_volume * 1e8)
+                    return sh_avg, sz_avg
+        return 14.5, 17.2
+    except Exception:
+        return 14.5, 17.2
+
 
 def get_market_volume() -> dict:
     """
-    获取A股上一交易日成交总额（沪指 AkShare，无需代理）。
-    注意：AkShare volume 字段单位与 BaoStock amount 不完全一致，
-    绝对值可能有偏差（~2倍），但变化率基本准确。
-    BaoStock 限流恢复后应优先使用。
+    获取A股上一交易日全市场成交总额（沪指+深证）。
+    方法：
+      1. 用 BaoStock（stock_zh_index_daily，直连）获取沪深指数成交量(股)
+      2. 用 macro 月度系数（成交金额/成交量）计算平均股价，元/股
+      3. 成交额(亿) = 成交量(股) × 平均股价 / 1e8
     """
+    import pandas as pd
     try:
         _clear_proxy()
         import akshare as ak
 
         trading_date = _get_latest_trading_date()
-        prev_date = _get_latest_trading_date(trading_date - timedelta(days=1))
 
-        def get_amount(symbol: str, target_date: date) -> float:
+        # 获取沪市/深市平均股价系数
+        sh_avg_price, sz_avg_price = _get_avg_price_coefficients()
+
+        # 获取当日成交量
+        def get_index_vol(symbol: str, target_date: date) -> tuple[float, float]:
+            """返回 (成交量=股, 收盘点位)"""
             df = ak.stock_zh_index_daily(symbol=symbol).sort_values('date')
-            row = df[df['date'].apply(lambda d: d.isoformat() == target_date.isoformat())]
+            # 日期列是 datetime.date，直接比较年月日
+            mask = df['date'].apply(lambda d: d.year == target_date.year and d.month == target_date.month and d.day == target_date.day)
+            row = df[mask]
             if row.empty:
-                row = df.tail(1)
-            # AkShare volume: 成交量（股），/1e8 = 亿元
-            return float(row.iloc[0]['volume']) / 1e8
+                # fallback 取倒数第2行（上一个交易日）
+                row = df.tail(2).iloc[0:1]
+                if row.empty:
+                    return 0.0, 0.0
+            vol = float(row.iloc[0]['volume'])
+            close = float(row.iloc[0]['close'])
+            return vol, close
 
-        today_amount = get_amount("sh000001", trading_date)
-        prev_amount = get_amount("sh000001", prev_date)
-        change_pct = round((today_amount - prev_amount) / prev_amount * 100, 2) \
-            if prev_amount else 0
+        today_sh_vol, today_sh_close = get_index_vol('sh000001', trading_date)
+        today_sz_vol, today_sz_close = get_index_vol('sz399001', trading_date)
+
+        today_sh_amount = today_sh_vol * sh_avg_price / 1e8  # 亿元
+        today_sz_amount = today_sz_vol * sz_avg_price / 1e8
+        today_total = round(today_sh_amount + today_sz_amount, 0)
+
+        # 昨日对比：以 trading_date 为基准，往前找上一个交易日
+        prev_date = _get_latest_prev_trading_date(trading_date)
+        prev_sh_vol, _ = get_index_vol('sh000001', prev_date)
+        prev_sz_vol, _ = get_index_vol('sz399001', prev_date)
+        prev_total = round(prev_sh_vol * sh_avg_price / 1e8 + prev_sz_vol * sz_avg_price / 1e8, 0)
+        change_pct = round((today_total - prev_total) / prev_total * 100, 2) if prev_total else 0
 
         return {
-            "amount": round(today_amount, 0),
-            "change_pct": change_pct,
-            "date": trading_date.isoformat(),
+            'amount': today_total,
+            'change_pct': change_pct,
+            'date': trading_date.isoformat(),
+            'sh_amount': round(today_sh_amount, 0),
+            'sz_amount': round(today_sz_amount, 0),
         }
-    except Exception:
-        return {"amount": 0, "change_pct": 0, "date": _get_latest_trading_date().isoformat()}
+    except Exception as e:
+        return {'amount': 0, 'change_pct': 0, 'date': _get_latest_trading_date().isoformat()}
 
 
 # ── 涨跌停家数 ─────────────────────────────────────────────────────────────

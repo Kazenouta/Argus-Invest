@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime, date
 from typing import Optional
 import math
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from app.models.monitor import (
     MonitorRule, MonitorEvent, MonitorCheckResponse,
@@ -92,59 +93,70 @@ DEFAULT_RULES: list[MonitorRule] = [
         threshold=1.0,
         description="5日 < 20日 < 60日均线，空头排列，下降趋势"
     ),
+    MonitorRule(
+        rule_id="MON-010",
+        name="布林带中轨回落支撑",
+        indicator="boll_near_middle",
+        operator=">=",
+        threshold=0.97,
+        description="股价回落至布林带中轨97%以内，来自上方，回调支撑信号"
+    ),
+    MonitorRule(
+        rule_id="MON-011",
+        name="布林带下轨回落关注",
+        indicator="boll_near_lower",
+        operator=">=",
+        threshold=0.97,
+        description="股价回落至布林带下轨97%以内，来自上方，下轨附近关注信号"
+    ),
 ]
 
 
 # ── 行情数据获取 ─────────────────────────────────────────────────────────────
 
-def _fetch_daily_akshare(ticker: str, days: int = 120) -> Optional[pd.DataFrame]:
+def _fetch_daily_akshare(ticker: str, days: int = 120, timeout: int = 15) -> Optional[pd.DataFrame]:
     """
-    使用 AkShare 获取A股/港股日线数据。
+    使用 AkShare 获取A股/港股日线数据，带 timeout 保护（默认15秒）。
     ticker: 股票代码，如 '000001'、'600519'、'00700'
     返回: DataFrame 或 None
     """
-    try:
+
+    def _do_fetch():
         import akshare as ak
 
-        # 判断市场
         ticker_str = str(ticker).strip().upper()
         if ticker_str.startswith(('SH', 'SZ', 'BJ')):
-            # 已有前缀
             pass
         elif ticker_str.isdigit():
-            # 判断A股
             code = ticker_str.zfill(6)
             if code.startswith(('6', '9')):
                 ticker_str = 'SH' + code
             elif code.startswith(('0', '1', '2', '3')):
                 ticker_str = 'SZ' + code
             else:
-                # 尝试港股
                 ticker_str = 'HK' + code
         else:
-            # 港股如 00700
             ticker_str = 'HK' + ticker_str
 
-        # A股日线
         if ticker_str.startswith(('SH', 'SZ', 'BJ')):
-            code = ticker_str[2:]
-            symbol_map = {'SH': 'sh', 'SZ': 'sz', 'BJ': 'bj'}
-            prefix = symbol_map.get(ticker_str[:2], 'sh')
-            df = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                     start_date="20200101", end_date="20991231",
-                                     adjust="qfq")
-            if df is not None and not df.empty:
-                df = df.rename(columns={
-                    '日期': 'date', '开盘': 'open', '收盘': 'close',
-                    '最高': 'high', '最低': 'low', '成交量': 'volume',
-                    '成交额': 'amount', '涨跌幅': 'pct_change'
-                })
-                df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
-                df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-                df['close'] = pd.to_numeric(df['close'], errors='coerce')
-                df['pct_change'] = pd.to_numeric(df.get('pct_change', df['close'].pct_change()*100) if 'pct_change' in df.columns else df['close'].pct_change()*100, errors='coerce')
-                return df.tail(days + 60)  # 多取一些用于计算指标
-        # 港股日线
+            code = ticker_str[2:].zfill(6)
+            prefix_map = {'SH': 'sh', 'SZ': 'sz', 'BJ': 'bj'}
+            prefix = prefix_map.get(ticker_str[:2], 'sh')
+            try:
+                df = ak.stock_zh_a_daily(symbol=prefix + code, adjust='qfq')
+                if df is not None and not df.empty:
+                    df = df.rename(columns={
+                        'date': 'date', 'open': 'open', 'close': 'close',
+                        'high': 'high', 'low': 'low', 'volume': 'volume'
+                    })
+                    df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+                    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+                    df['close'] = pd.to_numeric(df['close'], errors='coerce')
+                    # pct_change: 以当天close相对前一天close的变化
+                    df['pct_change'] = df['close'].pct_change() * 100
+                    return df.tail(days + 60)
+            except Exception:
+                pass
         elif ticker_str.startswith('HK'):
             code = ticker_str[2:].zfill(5)
             try:
@@ -163,7 +175,74 @@ def _fetch_daily_akshare(ticker: str, days: int = 120) -> Optional[pd.DataFrame]
                     return df.tail(days + 60)
             except Exception:
                 pass
+        return None
 
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_do_fetch)
+            return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        return None
+    except Exception:
+        return None
+
+
+def _fetch_daily_tushare(ticker: str, days: int = 120, timeout: int = 15) -> Optional[pd.DataFrame]:
+    """
+    使用 Tushare 获取A股日线数据（作为 AkShare 失败时的备选）。
+    ticker: 'SH600096', 'SZ000807' 等
+    """
+    from app.config import settings
+    token = getattr(settings, 'TUSHARE_TOKEN', None) or None
+    if not token:
+        return None
+
+    def _do_fetch():
+        import tushare as ts
+
+        ticker_str = str(ticker).strip().upper()
+        # 解析成 tushare 格式: 600519.SH, 000807.SZ
+        if ticker_str.startswith(('SH', 'SZ', 'BJ')):
+            code = ticker_str[2:].zfill(6)
+            prefix = {'SH': '.SH', 'SZ': '.SZ', 'BJ': '.BJ'}.get(ticker_str[:2], '.SH')
+            ts_code = code + prefix
+        elif ticker_str.isdigit():
+            code = ticker_str.zfill(6)
+            if code.startswith(('6', '9', '5', '11', '13', '15')):
+                ts_code = code + '.SH'
+            else:
+                ts_code = code + '.SZ'
+        else:
+            return None
+
+        try:
+            pro = ts.pro_api(token)
+            # Tushare 默认返回最近交易日，限制数量即可
+            df = pro.daily(ts_code=ts_code, start_date='20200101', end_date='20991231')
+            if df is None or df.empty:
+                return None
+
+            df = df.rename(columns={
+                'trade_date': 'date', 'open': 'open', 'high': 'high',
+                'low': 'low', 'close': 'close', 'vol': 'volume'
+            })
+            # Tushare 日期是 YYYYMMDD 字符串
+            df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+            # vol 单位是万股，转成股
+            df['volume'] = pd.to_numeric(df['volume'], errors='coerce') * 10000
+            df['close'] = pd.to_numeric(df['close'], errors='coerce')
+            df['pct_change'] = pd.to_numeric(df.get('pct_chg'), errors='coerce')
+            # 按日期升序排列（ oldest first ）
+            df = df.sort_values('date').reset_index(drop=True)
+            return df.tail(days + 60)
+        except Exception:
+            return None
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_do_fetch)
+            return future.result(timeout=timeout)
+    except FuturesTimeoutError:
         return None
     except Exception:
         return None
@@ -356,6 +435,24 @@ def _match_single_rule(iv: IndicatorValue, rule: MonitorRule):
             return True, "关注", 1.0, f"跌破布林带下轨({iv.boll_lower:.2f})"
         return False, "", 0, ""
 
+    # 布林带中轨接近（股价从上方回落，接近中轨支撑）
+    # 触发条件：股价在中轨的 97%~100% 区间内，且来自上方（收于中轨附近视为支撑区域）
+    if ind == "boll_near_middle":
+        if iv.boll_middle is not None and math.isfinite(iv.boll_middle) and iv.boll_middle > 0:
+            ratio = iv.close / iv.boll_middle
+            if 0.97 <= ratio <= 1.03:  # 在中轨 ±3% 范围内
+                return True, "支撑", ratio, f"接近布林带中轨({iv.boll_middle:.2f})，乖离率{(ratio-1)*100:+.2f}%"
+        return False, "", 0, ""
+
+    # 布林带下轨接近（股价从上方回落，接近下轨关注区域）
+    # 触发条件：股价在下轨的 97%~100% 区间内，且未跌破
+    if ind == "boll_near_lower":
+        if iv.boll_lower is not None and math.isfinite(iv.boll_lower) and iv.boll_lower > 0:
+            ratio = iv.close / iv.boll_lower
+            if 0.97 <= ratio < 1.0:  # 在下轨 97%~100% 区间，未跌破
+                return True, "关注", ratio, f"接近布林带下轨({iv.boll_lower:.2f})，乖离率{(ratio-1)*100:+.2f}%"
+        return False, "", 0, ""
+
     return False, "", 0, ""
 
 
@@ -404,8 +501,10 @@ def check_portfolio_indicators() -> MonitorCheckResponse:
         if not ticker:
             continue
 
-        # 获取数据
+        # 获取数据：优先 AkShare，失败则用 Tushare
         df = _fetch_daily_akshare(ticker)
+        if df is None or df.empty:
+            df = _fetch_daily_tushare(ticker)
         iv = calculate_indicators(df) if df is not None else None
 
         if iv is None:

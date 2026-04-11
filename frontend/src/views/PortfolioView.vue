@@ -426,15 +426,18 @@ function resetUpload() {
 
 async function checkPositions() {
   checking.value = true
+  checkResult.value = null
   try {
     await monitorStore.runCheck()
     const events = monitorStore.events
+    console.debug('[PortfolioView] checkPositions events:', events.length, events)
     checkResult.value = {
       checkedAt: new Date().toLocaleString('zh-CN'),
       totalEvents: events.length,
       totalPositions: store.positions.length,
     }
-  } catch {
+  } catch (err) {
+    console.error('[PortfolioView] checkPositions error:', err)
     ElMessage.error('检查失败，请稍后重试')
   } finally {
     checking.value = false
@@ -457,6 +460,19 @@ function getPositionClass(ratio?: number | null): string {
 onMounted(async () => {
   await store.loadPortfolio()
   await loadLatestPlans()
+  // 加载上次保存的检查结果（不重新计算）
+  const saved = await monitorStore.loadLastResult()
+  console.debug('[PortfolioView] loadLastResult result:', saved)
+  if (saved) {
+    checkResult.value = {
+      checkedAt: new Date(saved.checked_at).toLocaleString('zh-CN'),
+      totalEvents: saved.total_events,
+      totalPositions: saved.total_positions,
+    }
+    console.debug('[PortfolioView] checkResult set:', checkResult.value)
+  } else {
+    console.debug('[PortfolioView] no saved result found')
+  }
 })
 </script>
 

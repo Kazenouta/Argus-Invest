@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     WEAKNESS_FILE: str = "weakness.parquet"
     THINKING_FILE: str = "thinking.parquet"
     PLAN_FILE: str = "portfolio_plan.parquet"
+    MONITOR_FILE: str = "monitor_check.parquet"
 
     # AI settings
     AI_MODEL: str = "minimax/MiniMax-M2.7"  # default model
@@ -37,6 +38,9 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
+
+    # Tushare token
+    TUSHARE_TOKEN: str = ""
 
     class Config:
         env_file = ".env"

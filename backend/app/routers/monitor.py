@@ -9,6 +9,7 @@ from app.services.monitor_service import (
     update_monitor_status,
     DEFAULT_RULES,
 )
+from app.services.data_storage import DataStorage
 
 
 router = APIRouter(prefix="/api/monitor", tags=["Monitor"])
@@ -44,21 +45,47 @@ def check_positions() -> MonitorCheckResponse:
     """
     手动触发持仓指标检查。
     读取持仓 → 获取行情数据 → 计算指标 → 匹配规则 → 返回结果。
+    同时保存到本地，重启后仍可读取（刷新页面不丢失）。
     """
     resp = check_portfolio_indicators()
     update_monitor_status(resp)
+    # 持久化保存
+    DataStorage.save_monitor_check(
+        checked_at=resp.checked_at,
+        total_positions=resp.total_positions,
+        total_events=resp.total_events,
+        events_data=[e.model_dump(mode='json') for e in resp.events],
+        indicators_data=[i.model_dump(mode='json') for i in resp.indicators],
+    )
     return resp
 
 
 @router.get("/events", response_model=list[MonitorEvent])
 def get_events() -> list[MonitorEvent]:
     """
-    获取最近一次检查的触发事件列表。
-    （由 check_positions 的结果驱动，需要先调用 check 才会有数据）
+    获取最近一次检查的触发事件列表（从本地存储读取，不重新计算）。
     """
-    status = get_monitor_status()
-    if not status.last_checked_at:
+    saved = DataStorage.read_monitor_check()
+    if saved is None:
         return []
-    # 重新检查获取最新事件
-    resp = check_portfolio_indicators()
-    return resp.events
+    events = saved.get('events', [])
+    return [MonitorEvent(**e) for e in events]
+
+
+@router.get("/last-result")
+def get_last_check_result():
+    """
+    获取最近一次检查的完整结果（从本地存储读取，不重新计算）。
+    用于刷新页面后直接展示上次结果。
+    """
+    saved = DataStorage.read_monitor_check()
+    if saved is None:
+        return {"status": "no_data", "events": [], "indicators": [], "checked_at": None}
+    return {
+        "status": "ok",
+        "checked_at": saved['checked_at'],
+        "total_positions": saved['total_positions'],
+        "total_events": saved['total_events'],
+        "events": saved['events'],
+        "indicators": saved['indicators'],
+    }

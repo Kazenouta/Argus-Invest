@@ -1,38 +1,24 @@
 """
 Market AI overview service.
 
-方案：AkShare 抓取东方财富真实数据 → MiniMax-M2.7 解析合成结构化 JSON
-
-数据项：
-  1. A股今日总成交额 + 趋势描述 + 历史分位数
-  2. 今日涨跌停个数 + 变化描述
-  3. 今日融资余额 + 变化描述
-  4. 散户情绪变化描述
-  5. 资金流入 Top3 行业
-  6. 资金流出 Top3 行业
+方案：AkShare 抓取真实数据 → MiniMax M2.7 合成结构化 JSON
+（系统错误时自动重试，最多重试 3 次）
 """
 import os
 import re
 import json
-from datetime import datetime, date, timedelta
+import asyncio
+from datetime import datetime
 from typing import Any, Optional
 
 import httpx
-
-
-# ── 工具：清除代理 ─────────────────────────────────────────────────────────
-
-def _clear_proxy():
-    """清除所有代理环境变量，避免 httpx 走 SOCKS 出错"""
-    for k in ["http_proxy", "https_proxy", "all_proxy",
-              "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
-        os.environ.pop(k, None)
 
 
 # ── MiniMax M2.7 配置 ───────────────────────────────────────────────────────
 
 _MINIMAX_KEY: Optional[str] = None
 _BASE_URL = "https://api.minimaxi.com/anthropic"
+_MAX_RETRIES = 3
 
 
 def _get_minimax_key() -> str:
@@ -63,8 +49,7 @@ def _get_minimax_key() -> str:
 # ── Step 1：AkShare 抓取真实数据 ────────────────────────────────────────────
 
 def fetch_market_data() -> dict[str, Any]:
-    """用 AkShare 抓取东方财富真实市场数据"""
-    _clear_proxy()
+    """用 AkShare 抓取东方财富真实市场数据（使用系统代理）"""
     result: dict[str, Any] = {
         "成交额亿": None,
         "昨日成交额亿": None,
@@ -79,12 +64,19 @@ def fetch_market_data() -> dict[str, Any]:
     try:
         import akshare as ak
 
-        # 1. 成交额（上证指数日线，取最新交易日）
+        # 1. 成交额（沪深全市场，stock_zh_index_spot_em 单位为"元"）
+        sh_df = ak.stock_zh_index_spot_em(symbol='上证系列指数')
+        sh_amount_yuan = float(sh_df[sh_df['代码'] == '000001'].iloc[0]['成交额'])
+        sz_df = ak.stock_zh_index_spot_em(symbol='深证系列指数')
+        sz_amount_yuan = float(sz_df[sz_df['代码'] == '399001'].iloc[0]['成交额'])
+        result["成交额亿"] = round((sh_amount_yuan + sz_amount_yuan) / 1e8, 0)
+        # 昨日用日线数据
         index_df = ak.stock_zh_index_daily(symbol="sh000001").sort_values("date")
-        today_vol = float(index_df.iloc[-1]["volume"])  # 股
-        yesterday_vol = float(index_df.iloc[-2]["volume"]) if len(index_df) >= 2 else today_vol
-        result["成交额亿"] = round(today_vol / 1e8, 0)
-        result["昨日成交额亿"] = round(yesterday_vol / 1e8, 0)
+        yesterday_vol = float(index_df.iloc[-2]["volume"]) if len(index_df) >= 2 else 0
+        # 估算昨日全市场（用沪市占比估算）
+        sh_yesterday = yesterday_vol
+        sz_yesterday = float(ak.stock_zh_index_daily(symbol="sz399001").sort_values("date").iloc[-2]["volume"]) if len(index_df) >= 2 else 0
+        result["昨日成交额亿"] = round((sh_yesterday + sz_yesterday) / 1e8 * (sh_amount_yuan / (sh_amount_yuan + sz_amount_yuan + 1)), 0) if (sh_amount_yuan + sz_amount_yuan) > 0 else 0
 
         # 2. 涨跌停家数（取最新交易日）
         latest_date = index_df.iloc[-1]["date"].strftime("%Y%m%d")
@@ -107,7 +99,6 @@ def fetch_market_data() -> dict[str, Any]:
                 sh_latest = float(rz_sh.iloc[0]["融资余额"]) / 1e8
                 sz_latest = float(rz_sz.iloc[0]["融资余额"]) / 1e8
                 total_latest = sh_latest + sz_latest
-                # 取5日前（约第6行）的数据
                 if len(rz_sh) >= 6 and len(rz_sz) >= 6:
                     prev_total = float(rz_sh.iloc[5]["融资余额"]) / 1e8 + float(rz_sz.iloc[5]["融资余额"]) / 1e8
                     result["融资余额变化"] = round((total_latest - prev_total) / prev_total * 100, 2)
@@ -139,12 +130,12 @@ def fetch_market_data() -> dict[str, Any]:
     return result
 
 
-# ── Step 2：M2.7 合成结构化 JSON ──────────────────────────────────────────
+# ── Step 2：M2.7 合成（带重试）─────────────────────────────────────────────
 
 async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, Any]:
     api_key = _get_minimax_key()
     if not api_key:
-        return _error_result("未找到 MiniMax API Key")
+        return _error_result("未找到 MiniMax API Key，请配置 MINIMAX_API_KEY 环境变量")
 
     成交额_val = raw.get("成交额亿")
     成交额 = f"{int(成交额_val)}亿" if 成交额_val else "未知"
@@ -166,6 +157,7 @@ async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, An
 - 最新融资余额：{融资余额}（较5日前变化：{融资变化}%，正数表示增加）
 - 主力资金流入行业 Top3：{流入}
 - 主力资金流出行业 Top3：{流出}
+{f"[数据抓取警告：{err}]" if err else ""}
 
 分析要求：
 1. 对比今日和昨日成交额，判断是放量还是缩量，给出历史分位估算
@@ -179,7 +171,7 @@ async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, An
   "成交额": {{
     "value": "数字亿元",
     "趋势描述": "一句话描述今日成交量相对昨日的变化趋势",
-    "历史分位": "估算当前成交额所处历史分位，如'偏低约20%分位'或'偏高约80%分位'",
+    "历史分位": "估算当前成交额所处历史分位，如'历史分位约30%'或'历史分位约80%'",
     "信号": "放量/缩量/持平"
   }},
   "涨跌停": {{
@@ -209,38 +201,54 @@ async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, An
         "temperature": 0.3,
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
-            resp = await client.post(
-                f"{_BASE_URL}/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "Content-Type": "application/json",
-                    "anthropic-version": "2023-06-01",
-                },
-                json=payload,
-            )
+    last_error = ""
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+                resp = await client.post(
+                    f"{_BASE_URL}/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "Content-Type": "application/json",
+                        "anthropic-version": "2023-06-01",
+                    },
+                    json=payload,
+                )
 
-        if resp.status_code != 200:
-            return _error_result(f"M2.7 API 返回 {resp.status_code}: {resp.text[:300]}")
+            if resp.status_code != 200:
+                last_error = f"M2.7 API 返回 {resp.status_code}: {resp.text[:300]}"
+                # 1033/500/502/503/529 等系统错误，重试
+                if resp.status_code in (500, 502, 503, 529) or "1033" in resp.text or "overloaded" in resp.text:
+                    await asyncio.sleep(5 * attempt)  # 递增等待
+                    continue
+                return _error_result(last_error)
 
-        result_data = resp.json()
-        content_list = result_data.get("content", [])
-        raw_text = ""
-        if isinstance(content_list, list):
-            for c in content_list:
-                if c.get("type") == "text":
-                    raw_text = c["text"]
-                    break
+            result_data = resp.json()
+            content_list = result_data.get("content", [])
+            raw_text = ""
+            if isinstance(content_list, list):
+                for c in content_list:
+                    if c.get("type") == "text":
+                        raw_text = c["text"]
+                        break
 
-        parsed = _parse_json(raw_text)
-        if parsed:
-            parsed["更新时间"] = now_str
-            return parsed
-        return _error_result(f"M2.7 返回格式解析失败：{raw_text[:300]}")
+            parsed = _parse_json(raw_text)
+            if parsed:
+                parsed["更新时间"] = now_str
+                return parsed
+            last_error = f"M2.7 返回格式解析失败：{raw_text[:300]}"
+            # 格式解析失败不重试，直接返回错误
+            return _error_result(last_error)
 
-    except Exception as e:
-        return _error_result(f"请求异常：{str(e)}")
+        except Exception as e:
+            last_error = f"请求异常：{str(e)}"
+            if attempt < _MAX_RETRIES:
+                await asyncio.sleep(2 * attempt)
+                continue
+            return _error_result(last_error)
+
+    # 所有重试均失败
+    return _error_result(f"M2.7 服务不可用（已重试{_MAX_RETRIES}次）：{last_error}")
 
 
 def _parse_json(text: str) -> Optional[dict[str, Any]]:
@@ -277,7 +285,7 @@ def _error_result(reason: str) -> dict[str, Any]:
     }
 
 
-# ── 主入口 ────────────────────────────────────────────────────────────────
+# ── 主入口 ───────────────────────────────────────────────────────────────
 
 async def synthesize_market_overview() -> dict[str, Any]:
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")

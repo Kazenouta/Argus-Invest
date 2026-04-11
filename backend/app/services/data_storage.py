@@ -217,6 +217,42 @@ class DataStorage:
         df = df[df["id"] != plan_id]
         cls.write_parquet(cls.plans_path(), df)
 
+    # ── Monitor Check Results ─────────────────────────────────────────────
+
+    @classmethod
+    def monitor_path(cls) -> Path:
+        return cls._parquet_path(settings.USER_DIR, settings.MONITOR_FILE)
+
+    @classmethod
+    def save_monitor_check(cls, checked_at: datetime, total_positions: int,
+                           total_events: int, events_data: list, indicators_data: list) -> None:
+        """保存检查持仓的结果（覆盖写入）"""
+        import json
+        df = pd.DataFrame([{
+            'checked_at': checked_at.isoformat(),
+            'total_positions': total_positions,
+            'total_events': total_events,
+            'events': json.dumps(events_data, default=str),
+            'indicators': json.dumps(indicators_data, default=str),
+        }])
+        cls.write_parquet(cls.monitor_path(), df)
+
+    @classmethod
+    def read_monitor_check(cls) -> Optional[dict]:
+        """读取最近一次检查持仓的结果，不存在返回 None"""
+        import json
+        df = cls.read_parquet(cls.monitor_path())
+        if df.empty:
+            return None
+        row = df.iloc[-1]
+        return {
+            'checked_at': row['checked_at'],
+            'total_positions': int(row['total_positions']),
+            'total_events': int(row['total_events']),
+            'events': json.loads(row['events']),
+            'indicators': json.loads(row['indicators']),
+        }
+
     # ── Thinking ─────────────────────────────────────────────────────────
 
     @classmethod

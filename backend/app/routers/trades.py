@@ -11,6 +11,7 @@ import openpyxl
 
 from app.models.trades import TradeRecord
 from app.services.data_storage import DataStorage
+from app.services.trade_analysis_service import analyze_trades
 
 router = APIRouter(prefix="/api/trades", tags=["Trades"])
 
@@ -359,3 +360,15 @@ def update_trade(trade_id: int, trade: TradeRecord):
             df.loc[idx[0], col] = val
     df.to_parquet(DataStorage.trades_path(), index=False)
     return {"status": "ok", "id": trade_id}
+
+
+@router.get("/analyze")
+def get_trade_analysis(
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+):
+    """
+    分析调仓记录的质量：买入时机、逻辑完整性、信号依据等。
+    返回汇总统计和逐条分析明细。
+    """
+    return analyze_trades(start_date, end_date)

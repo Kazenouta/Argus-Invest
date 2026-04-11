@@ -42,6 +42,7 @@ export const useMonitorStore = defineStore('monitor', () => {
     loading.value = true
     try {
       const res = await monitorApi.events()
+      console.debug('[monitor] loadEvents response:', res.data)
       events.value = res.data ?? []
     } catch {
       events.value = []
@@ -50,18 +51,47 @@ export const useMonitorStore = defineStore('monitor', () => {
     }
   }
 
+  /** 从本地存储加载上次检查结果（不重新计算，用于页面刷新后展示） */
+  async function loadLastResult() {
+    loading.value = true
+    try {
+      const res = await monitorApi.lastResult()
+      console.debug('[monitor] loadLastResult response:', res.data)
+      const data = res.data
+      if (data?.status === 'ok') {
+        events.value = data.events ?? []
+        indicators.value = data.indicators ?? []
+        lastCheckedAt.value = data.checked_at ?? null
+        return data
+      }
+    } catch (err) {
+      console.error('[monitor] loadLastResult error:', err)
+    } finally {
+      loading.value = false
+    }
+    return null
+  }
+
   async function runCheck() {
     loading.value = true
+    // Clear previous results immediately so UI shows fresh state
+    events.value = []
+    indicators.value = []
     try {
       const res = await monitorApi.check()
       const data = res.data
-      events.value = data.events ?? []
-      indicators.value = data.indicators ?? []
-      lastCheckedAt.value = data.checked_at ?? null
+      console.debug('[monitor] check result:', data)
+      events.value = data?.events ?? []
+      indicators.value = data?.indicators ?? []
+      lastCheckedAt.value = data?.checked_at ?? null
+    } catch (err) {
+      console.error('[monitor] check failed:', err)
+      events.value = []
+      indicators.value = []
     } finally {
       loading.value = false
     }
   }
 
-  return { events, indicators, lastCheckedAt, loading, loadEvents, runCheck }
+  return { events, indicators, lastCheckedAt, loading, loadEvents, loadLastResult, runCheck }
 })
