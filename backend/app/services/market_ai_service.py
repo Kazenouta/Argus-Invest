@@ -49,7 +49,8 @@ def _get_minimax_key() -> str:
 # ── Step 1：AkShare 抓取真实数据 ────────────────────────────────────────────
 
 def fetch_market_data() -> dict[str, Any]:
-    """用 AkShare 抓取东方财富真实市场数据（使用系统代理）"""
+    """用 AkShare 抓取真实市场数据（有超时保护，线程方式实现）"""
+    import threading
     result: dict[str, Any] = {
         "成交额亿": None,
         "昨日成交额亿": None,
@@ -60,72 +61,78 @@ def fetch_market_data() -> dict[str, Any]:
         "资金流入行业": [],
         "资金流出行业": [],
     }
+    _error_msg = []
 
-    try:
-        import akshare as ak
-
-        # 1. 成交额（沪深全市场，stock_zh_index_spot_em 单位为"元"）
-        sh_df = ak.stock_zh_index_spot_em(symbol='上证系列指数')
-        sh_amount_yuan = float(sh_df[sh_df['代码'] == '000001'].iloc[0]['成交额'])
-        sz_df = ak.stock_zh_index_spot_em(symbol='深证系列指数')
-        sz_amount_yuan = float(sz_df[sz_df['代码'] == '399001'].iloc[0]['成交额'])
-        result["成交额亿"] = round((sh_amount_yuan + sz_amount_yuan) / 1e8, 0)
-        # 昨日用日线数据
-        index_df = ak.stock_zh_index_daily(symbol="sh000001").sort_values("date")
-        yesterday_vol = float(index_df.iloc[-2]["volume"]) if len(index_df) >= 2 else 0
-        # 估算昨日全市场（用沪市占比估算）
-        sh_yesterday = yesterday_vol
-        sz_yesterday = float(ak.stock_zh_index_daily(symbol="sz399001").sort_values("date").iloc[-2]["volume"]) if len(index_df) >= 2 else 0
-        result["昨日成交额亿"] = round((sh_yesterday + sz_yesterday) / 1e8 * (sh_amount_yuan / (sh_amount_yuan + sz_amount_yuan + 1)), 0) if (sh_amount_yuan + sz_amount_yuan) > 0 else 0
-
-        # 2. 涨跌停家数（取最新交易日）
-        latest_date = index_df.iloc[-1]["date"].strftime("%Y%m%d")
+    def _fetch():
         try:
-            zt_df = ak.stock_zt_pool_em(date=latest_date)
-            result["涨停家数"] = len(zt_df) if zt_df is not None and not zt_df.empty else 0
-        except Exception:
-            result["涨停家数"] = 0
-        try:
-            dt_df = ak.stock_zt_pool_dtgc_em(date=latest_date)
-            result["跌停家数"] = len(dt_df) if dt_df is not None and not dt_df.empty else 0
-        except Exception:
-            result["跌停家数"] = 0
+            import akshare as ak
 
-        # 3. 融资余额（合并沪深，AkShare macro 接口）
-        try:
-            rz_sh = ak.macro_china_market_margin_sh().sort_values("日期", ascending=False)
-            rz_sz = ak.macro_china_market_margin_sz().sort_values("日期", ascending=False)
-            if not rz_sh.empty and not rz_sz.empty:
-                sh_latest = float(rz_sh.iloc[0]["融资余额"]) / 1e8
-                sz_latest = float(rz_sz.iloc[0]["融资余额"]) / 1e8
-                total_latest = sh_latest + sz_latest
-                if len(rz_sh) >= 6 and len(rz_sz) >= 6:
-                    prev_total = float(rz_sh.iloc[5]["融资余额"]) / 1e8 + float(rz_sz.iloc[5]["融资余额"]) / 1e8
-                    result["融资余额变化"] = round((total_latest - prev_total) / prev_total * 100, 2)
-                result["融资余额亿"] = round(total_latest, 0)
-        except Exception:
-            pass
+            # 1. 成交额：BaoStock 直连
+            try:
+                sh_daily = ak.stock_zh_index_daily(symbol="sh000001").sort_values("date")
+                sz_daily = ak.stock_zh_index_daily(symbol="sz399001").sort_values("date")
+                today_sh = sh_daily.iloc[-1]
+                prev_sh = sh_daily.iloc[-2]
+                today_sz = sz_daily.iloc[-1]
+                prev_sz = sz_daily.iloc[-2]
 
-        # 4. 行业资金流向（东方财富行业板块资金流）
-        try:
-            ind_df = ak.stock_fund_flow_industry()
-            if ind_df is not None and not ind_df.empty:
-                df_sorted = ind_df.sort_values("净额", ascending=False)
-                inflow_rows = df_sorted.head(3)
-                outflow_rows = df_sorted.tail(3)
-                result["资金流入行业"] = [
-                    f"{row['行业']}({row['净额']:.1f}亿)"
-                    for _, row in inflow_rows.iterrows()
-                ]
-                result["资金流出行业"] = [
-                    f"{row['行业']}({row['净额']:.1f}亿)"
-                    for _, row in outflow_rows.iterrows()
-                ]
-        except Exception:
-            pass
+                cap_df = ak.macro_china_stock_market_cap().sort_values("数据日期", ascending=False)
+                row = cap_df.iloc[1]
+                sh_avg = float(row["成交金额-上海"]) * 1e8 / (float(row["成交量-上海"]) * 1e8) if float(row["成交量-上海"]) > 0 else 14.5
+                sz_avg = float(row["成交金额-深圳"]) * 1e8 / (float(row["成交量-深圳"]) * 1e8) if float(row["成交量-深圳"]) > 0 else 17.2
 
-    except Exception as e:
-        result["_error"] = str(e)
+                result["成交额亿"] = round(float(today_sh["volume"]) * sh_avg / 1e8 + float(today_sz["volume"]) * sz_avg / 1e8, 0)
+                result["昨日成交额亿"] = round(float(prev_sh["volume"]) * sh_avg / 1e8 + float(prev_sz["volume"]) * sz_avg / 1e8, 0)
+            except Exception as e:
+                _error_msg.append(f"成交额: {e}")
+
+            # 2. 涨跌停
+            try:
+                if sh_daily is not None:
+                    latest_date = sh_daily.iloc[-1]["date"].strftime("%Y%m%d")
+                    zt_df = ak.stock_zt_pool_em(date=latest_date)
+                    result["涨停家数"] = len(zt_df) if zt_df is not None and not zt_df.empty else 0
+                    dt_df = ak.stock_zt_pool_dtgc_em(date=latest_date)
+                    result["跌停家数"] = len(dt_df) if dt_df is not None and not dt_df.empty else 0
+            except Exception as e:
+                _error_msg.append(f"涨跌停: {e}")
+
+            # 3. 融资余额
+            try:
+                rz_sh = ak.macro_china_market_margin_sh().sort_values("日期", ascending=False)
+                rz_sz = ak.macro_china_market_margin_sz().sort_values("日期", ascending=False)
+                if not rz_sh.empty and not rz_sz.empty:
+                    sh_latest = float(rz_sh.iloc[0]["融资余额"]) / 1e8
+                    sz_latest = float(rz_sz.iloc[0]["融资余额"]) / 1e8
+                    total_latest = sh_latest + sz_latest
+                    if len(rz_sh) >= 6 and len(rz_sz) >= 6:
+                        prev_total = float(rz_sh.iloc[5]["融资余额"]) / 1e8 + float(rz_sz.iloc[5]["融资余额"]) / 1e8
+                        result["融资余额变化"] = round((total_latest - prev_total) / prev_total * 100, 2)
+                    result["融资余额亿"] = round(total_latest, 0)
+            except Exception as e:
+                _error_msg.append(f"融资: {e}")
+
+            # 4. 行业资金流向
+            try:
+                ind_df = ak.stock_fund_flow_industry()
+                if ind_df is not None and not ind_df.empty:
+                    df_sorted = ind_df.sort_values("净额", ascending=False)
+                    result["资金流入行业"] = [f"{r['行业']}({r['净额']:.1f}亿)" for _, r in df_sorted.head(3).iterrows()]
+                    result["资金流出行业"] = [f"{r['行业']}({r['净额']:.1f}亿)" for _, r in df_sorted.tail(3).iterrows()]
+            except Exception as e:
+                _error_msg.append(f"资金流向: {e}")
+
+        except Exception as e:
+            _error_msg.append(str(e))
+
+    t = threading.Thread(target=_fetch)
+    t.start()
+    t.join(timeout=15)  # 最多等15秒
+    if t.is_alive():
+        _error_msg.append("AkShare 抓取超时（15秒），部分数据未获取")
+
+    if _error_msg:
+        result["_error"] = "; ".join(_error_msg)
 
     return result
 
