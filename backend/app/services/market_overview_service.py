@@ -11,6 +11,8 @@ import os
 import json
 from datetime import datetime, date, timedelta
 
+from app.config import settings
+
 
 # ── 工具：清除代理（httpx 用）───────────────────────────────────────────────
 
@@ -93,21 +95,7 @@ def get_market_volume() -> dict:
         tushare_error = None
         try:
             import tushare as ts
-            token = os.environ.get('TUSHARE_TOKEN', '').strip()
-            if not token:
-                import pathlib
-                profile_path = pathlib.Path.home() / '.openclaw/agents/main/agent/auth-profiles.json'
-                if profile_path.exists():
-                    try:
-                        data = json.loads(profile_path.read_text(encoding='utf-8'))
-                        profiles = data.get('profiles', {})
-                        for name in ['tushare:pro', 'tushare']:
-                            if name in profiles:
-                                token = profiles[name].get('key', '').strip()
-                                if token:
-                                    break
-                    except Exception:
-                        pass
+            token = os.environ.get('TUSHARE_TOKEN', '').strip() or settings.TUSHARE_TOKEN.strip()
             if not token:
                 token = '703fd07f16a5c9e171961ad1a980d8b90793243b78b1ba6b0d92791d'
             pro = ts.pro_api(token)

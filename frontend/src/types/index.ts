@@ -58,18 +58,21 @@ export interface ThinkingRecord {
 }
 
 export interface WeaknessItem {
-  id?: number
-  weakness_type: string
-  title: string
-  description: string
-  occurrence_count: number
-  avg_loss_ratio: number
-  max_loss_ratio: number
-  severity: 'low' | 'medium' | 'high' | 'critical'
+  id: string              // e.g. 'W001'
+  name: string            // e.g. 'T+0成瘾（日内短线刷单）'
+    severity: 'minor' | 'moderate' | 'major' | 'critical'
+  category: string        // e.g. '交易行为', '仓位管理', '止损纪律', '市场风险'
+  description: string     // 详细描述
+  data_points: string     // 具体数据证据
+  affected_stocks: string // 涉及标的
+  monetize_impact: string // 金钱影响描述
+  related_weakness: string  // JSON string array, e.g. '["W002", "W003"]'
+  recommended_rules: string  // JSON string array
   enabled: boolean
   confirmed: boolean
-  created_at?: string
-  updated_at?: string
+  created_at: string
+  version?: string
+  last_updated?: string
 }
 
 export interface WeaknessProfile {

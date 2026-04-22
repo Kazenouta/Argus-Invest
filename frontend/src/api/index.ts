@@ -49,7 +49,7 @@ export const weaknessApi = {
   save: (profile: unknown) =>
     api.post('/weakness/', profile),
 
-  confirmItem: (itemId: number, confirmed: boolean = true) =>
+  confirmItem: (itemId: string, confirmed: boolean = true) =>
     api.put(`/weakness/${itemId}/confirm`, null, { params: { confirmed } }),
 }
 
@@ -60,6 +60,9 @@ export const rulesApi = {
 
   save: (library: unknown) =>
     api.post('/rules/', library),
+
+  update: (ruleId: string, patch: unknown) =>
+    api.put(`/rules/${ruleId}`, patch),
 
   reset: () => api.post('/rules/reset'),
 }

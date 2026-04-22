@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     AI_MODEL: str = "minimax/MiniMax-M2.7"  # default model
     AI_API_BASE: str = "https://api.minimax.chat/v1"
 
+    # MiniMax API key
+    MINIMAX_API_KEY: str = ""
+
     # Mail settings (placeholder)
     SMTP_HOST: str = "smtp.example.com"
     SMTP_PORT: int = 587

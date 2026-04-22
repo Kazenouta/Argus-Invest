@@ -313,7 +313,7 @@ class DataStorage:
             if isinstance(obj, np.floating):
                 return float(obj)
             if isinstance(obj, np.ndarray):
-                return obj.tolist()
+                return _to_native(obj.tolist())
             if isinstance(obj, dict):
                 return {k: _to_native(v) for k, v in obj.items()}
             if isinstance(obj, (list, tuple)):
@@ -351,7 +351,7 @@ class DataStorage:
             if isinstance(obj, np.floating):
                 return float(obj)
             if isinstance(obj, np.ndarray):
-                return obj.tolist()
+                return _to_native(obj.tolist())
             if isinstance(obj, dict):
                 return {k: _to_native(v) for k, v in obj.items()}
             if isinstance(obj, (list, tuple)):
@@ -359,3 +359,50 @@ class DataStorage:
             return obj
 
         return _to_native(df.iloc[0].to_dict())
+
+    # ── Trade Analysis Cache ──────────────────────────────────────────────
+
+    @classmethod
+    def analysis_cache_path(cls) -> Path:
+        return cls._parquet_path(settings.USER_DIR, "trade_analysis_cache.parquet")
+
+    @classmethod
+    def save_analysis_cache(cls, data: dict) -> None:
+        """保存调仓分析结果缓存（覆盖写入）"""
+        # 分析结果包含 summary/details/analyzed_at，直接存整个dict
+        df = pd.DataFrame([data])
+        cls.write_parquet(cls.analysis_cache_path(), df)
+
+    @classmethod
+    def load_analysis_cache(cls) -> Optional[dict]:
+        """加载调仓分析缓存，无缓存则返回 None（numpy类型转Python原生）"""
+        path = cls.analysis_cache_path()
+        if not path.exists():
+            return None
+        df = cls.read_parquet(path)
+        if df is None or df.empty:
+            return None
+        row = df.iloc[0].to_dict()
+
+        def _to_native(obj):
+            import numpy as np
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return _to_native(obj.tolist())
+            if isinstance(obj, dict):
+                return {k: _to_native(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_to_native(x) for x in obj]
+            return obj
+
+        return _to_native(row)
+
+    @classmethod
+    def clear_analysis_cache(cls) -> None:
+        """清除调仓分析缓存"""
+        path = cls.analysis_cache_path()
+        if path.exists():
+            path.unlink()

@@ -13,6 +13,13 @@ from app.models.trades import TradeRecord
 from app.services.data_storage import DataStorage
 from app.services.trade_analysis_service import analyze_trades
 
+
+def _clear_proxy():
+    import os
+    for k in ['http_proxy', 'https_proxy', 'all_proxy',
+              'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY']:
+        os.environ.pop(k, None)
+
 router = APIRouter(prefix="/api/trades", tags=["Trades"])
 
 
@@ -311,6 +318,9 @@ def upload_trades_xlsx(
         final_df = pd.concat([merged_df, new_records_df], ignore_index=True) if not merged_df.empty else new_records_df
         final_df.to_parquet(DataStorage.trades_path(), index=False)
 
+        # 上传新记录后清除分析缓存（下次分析需要重新计算）
+        DataStorage.clear_analysis_cache()
+
         return {
             "status": "ok",
             "format": format_type,
@@ -342,6 +352,7 @@ def delete_trade(trade_id: int):
         raise HTTPException(status_code=404, detail="调仓记录不存在")
     df = df[df["id"] != trade_id]
     df.to_parquet(DataStorage.trades_path(), index=False)
+    DataStorage.clear_analysis_cache()
     return {"status": "ok"}
 
 
@@ -359,16 +370,71 @@ def update_trade(trade_id: int, trade: TradeRecord):
         if col not in ("id",):
             df.loc[idx[0], col] = val
     df.to_parquet(DataStorage.trades_path(), index=False)
+    DataStorage.clear_analysis_cache()
     return {"status": "ok", "id": trade_id}
 
 
 @router.get("/analyze")
 def get_trade_analysis(
-    start_date: Optional[date] = Query(None),
-    end_date: Optional[date] = Query(None),
+    refresh: bool = Query(False, description="强制重新分析（忽略缓存）"),
 ):
     """
-    分析调仓记录的质量：买入时机、逻辑完整性、信号依据等。
-    返回汇总统计和逐条分析明细。
+    分析最近5个交易日内的调仓记录（买入时机、逻辑完整性、信号依据等）。
+    结果自动缓存到后端，下次调用（refresh=false）直接返回缓存，秒开。
+    传入 refresh=true 可强制重新计算。
     """
-    return analyze_trades(start_date, end_date)
+    # 1. 尝试从缓存加载
+    if not refresh:
+        cached = DataStorage.load_analysis_cache()
+        if cached is not None:
+            return cached
+
+    # 2. 计算最近5个交易日区间
+    from datetime import timedelta
+    trading_date = DataStorage._get_latest_trading_date() if hasattr(DataStorage, '_get_latest_trading_date') else None
+    if trading_date is None:
+        import baostock as bs
+        _clear_proxy()
+        bs.login()
+        sh_df = bs.query_history_k_data_plus('sh.000001',
+            'date', start_date='2020-01-01', end_date='2099-12-31',
+            frequency='d', adjustflag='3')
+        dates = []
+        while sh_df.error_code == '0' and sh_df.next():
+            dates.append(sh_df.get_row_data()[0])
+        bs.logout()
+        dates.sort()
+        trading_date = dates[-1] if dates else str(date.today())
+
+    if isinstance(trading_date, str):
+        end_dt = date.fromisoformat(trading_date)
+    else:
+        end_dt = trading_date
+
+    # 往前数5个交易日
+    _all_dates = []
+    try:
+        import baostock as bs
+        _clear_proxy()
+        bs.login()
+        sh_df = bs.query_history_k_data_plus('sh.000001',
+            'date', start_date=(end_dt - timedelta(days=30)).isoformat(),
+            end_date=end_dt.isoformat(), frequency='d', adjustflag='3')
+        while sh_df.error_code == '0' and sh_df.next():
+            _all_dates.append(sh_df.get_row_data()[0])
+        bs.logout()
+    except Exception:
+        pass
+
+    if len(_all_dates) >= 5:
+        start_dt = _all_dates[-5]
+        end_str = _all_dates[-1]
+    else:
+        end_str = end_dt.isoformat()
+        start_dt = (end_dt - timedelta(days=14)).isoformat()
+
+    result = analyze_trades(start_date=date.fromisoformat(start_dt), end_date=date.fromisoformat(end_str))
+
+    # 3. 保存缓存
+    DataStorage.save_analysis_cache(result)
+    return result

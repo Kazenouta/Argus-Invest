@@ -2,7 +2,7 @@
 Market AI overview service.
 
 方案：AkShare 抓取真实数据 → MiniMax M2.7 合成结构化 JSON
-（系统错误时自动重试，最多重试 3 次）
+（系统错误时自动重试，最多重试 10 次）
 """
 import os
 import re
@@ -13,37 +13,24 @@ from typing import Any, Optional
 
 import httpx
 
+from app.config import settings
+
 
 # ── MiniMax M2.7 配置 ───────────────────────────────────────────────────────
 
 _MINIMAX_KEY: Optional[str] = None
 _BASE_URL = "https://api.minimaxi.com/anthropic"
-_MAX_RETRIES = 3
+_MAX_RETRIES = 10
 
 
 def _get_minimax_key() -> str:
     global _MINIMAX_KEY
     if _MINIMAX_KEY:
         return _MINIMAX_KEY
-    key = os.environ.get("MINIMAX_API_KEY", "").strip()
+    key = os.environ.get("MINIMAX_API_KEY", "").strip() or settings.MINIMAX_API_KEY.strip()
     if key:
         _MINIMAX_KEY = key
-        return _MINIMAX_KEY
-    import pathlib
-    profile_path = pathlib.Path.home() / ".openclaw/agents/main/agent/auth-profiles.json"
-    if profile_path.exists():
-        try:
-            data = json.loads(profile_path.read_text(encoding="utf-8"))
-            profiles = data.get("profiles", {})
-            for name in ["minimax:cn", "minimax"]:
-                if name in profiles:
-                    k = profiles[name].get("key", "").strip()
-                    if k:
-                        _MINIMAX_KEY = k
-                        return _MINIMAX_KEY
-        except Exception:
-            pass
-    return ""
+    return _MINIMAX_KEY or ""
 
 
 # ── Step 1：AkShare 抓取真实数据 ────────────────────────────────────────────
@@ -82,21 +69,7 @@ def fetch_market_data() -> dict[str, Any]:
             import akshare as ak
             import tushare as ts
 
-            token = os.environ.get('TUSHARE_TOKEN', '').strip()
-            if not token:
-                import pathlib
-                profile_path = pathlib.Path.home() / '.openclaw/agents/main/agent/auth-profiles.json'
-                if profile_path.exists():
-                    try:
-                        data = json.loads(profile_path.read_text(encoding='utf-8'))
-                        profiles = data.get('profiles', {})
-                        for name in ['tushare:pro', 'tushare']:
-                            if name in profiles:
-                                token = profiles[name].get('key', '').strip()
-                                if token:
-                                    break
-                    except Exception:
-                        pass
+            token = os.environ.get('TUSHARE_TOKEN', '').strip() or settings.TUSHARE_TOKEN.strip()
             if not token:
                 token = '703fd07f16a5c9e171961ad1a980d8b90793243b78b1ba6b0d92791d'
             pro_local = ts.pro_api(token)
@@ -176,13 +149,21 @@ def fetch_market_data() -> dict[str, Any]:
             except Exception as e:
                 _error_msg.append(f"融资: {e}")
 
-            # 4. 行业资金流向
+            # 4. 行业资金流向（含今日涨跌幅）
             try:
                 ind_df = ak.stock_fund_flow_industry()
                 if ind_df is not None and not ind_df.empty:
                     df_sorted = ind_df.sort_values("净额", ascending=False)
-                    result["资金流入行业"] = [f"{r['行业']}({r['净额']:.1f}亿)" for _, r in df_sorted.head(3).iterrows()]
-                    result["资金流出行业"] = [f"{r['行业']}({r['净额']:.1f}亿)" for _, r in df_sorted.tail(3).iterrows()]
+                    # 资金流入Top3
+                    result["资金流入行业"] = [
+                        {"行业": r["行业"], "净额": round(r["净额"], 1), "涨跌幅": round(float(r["行业-涨跌幅"]), 2)}
+                        for _, r in df_sorted.head(3).iterrows()
+                    ]
+                    # 资金流出Top3
+                    result["资金流出行业"] = [
+                        {"行业": r["行业"], "净额": round(r["净额"], 1), "涨跌幅": round(float(r["行业-涨跌幅"]), 2)}
+                        for _, r in df_sorted.tail(3).iterrows()
+                    ]
             except Exception as e:
                 _error_msg.append(f"资金流向: {e}")
 
@@ -216,54 +197,56 @@ async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, An
     融资余额_val = raw.get("融资余额亿")
     融资余额 = f"{int(融资余额_val)}亿" if 融资余额_val else "未知"
     融资变化 = raw.get("融资余额变化", 0)
-    流入 = "；".join(raw.get("资金流入行业") or ["未知"])
-    流出 = "；".join(raw.get("资金流出行业") or ["未知"])
+    _pct = '%'
+    流入 = "；".join([f"{r['行业']}({r['净额']}亿, {r['涨跌幅']:.2f}{_pct})" for r in raw.get("资金流入行业")]) or "未知"
+    流出 = "；".join([f"{r['行业']}({r['净额']}亿, {r['涨跌幅']:.2f}{_pct})" for r in raw.get("资金流出行业")]) or "未知"
+
     err = raw.get("_error", "")
 
-    user_prompt = f"""你是一个专业的 A股市场数据分析助手。以下是今日东方财富抓取的真实市场数据，请综合分析后输出结构化 JSON。
-
-真实数据：
-- 今日A股总成交额：{成交额}（昨日：{昨日成交额}）
-- 涨停家数/跌停家数：{涨跌停}
-- 最新融资余额：{融资余额}（较5日前变化：{融资变化}%，正数表示增加）
-- 主力资金流入行业 Top3：{流入}
-- 主力资金流出行业 Top3：{流出}
-{f"[数据抓取警告：{err}]" if err else ""}
-
-分析要求：
-1. 对比今日和昨日成交额，判断是放量还是缩量，给出历史分位估算
-2. 结合涨停>跌停还是<跌停，判断市场情绪偏多还是偏空
-3. 融资余额增加通常表示散户加杠杆（做多情绪），减少表示去杠杆
-4. 综合成交额、涨跌停、融资余额变化，给出综合信号
-
-请严格按以下 JSON 格式输出（只输出 JSON，不要其他文字）：
-
-{{
-  "成交额": {{
-    "value": "数字亿元",
-    "趋势描述": "一句话描述今日成交量相对昨日的变化趋势",
-    "历史分位": "估算当前成交额所处历史分位，如'历史分位约30%'或'历史分位约80%'",
-    "信号": "放量/缩量/持平"
-  }},
-  "涨跌停": {{
-    "value": "涨停数/跌停数",
-    "变化描述": "一句话描述涨跌停反映的市场情绪",
-    "信号": "偏多/偏空/中性"
-  }},
-  "融资余额": {{
-    "value": "数字亿元",
-    "变化描述": "一句话描述融资余额近期变化",
-    "信号": "做多情绪/去杠杆偏空/中性"
-  }},
-  "散户情绪": {{
-    "描述": "综合涨跌停和融资余额描述散户当前情绪",
-    "信号": "做多情绪/去杠杆偏空/中性"
-  }},
-  "资金流入行业": ["行业1", "行业2", "行业3"],
-  "资金流出行业": ["行业1", "行业2", "行业3"],
-  "综合信号": "看多/偏多/中性/偏空/看空",
-  "更新时间": "{now_str}"
-}}"""
+    # 拼接 prompt（避免 f-string 多重 {/%} 转义问题）
+    _err_block = f"[数据抓取警告：{err}]" if err else ""
+    user_prompt = (
+        f"你是一个专业的 A股市场数据分析助手。以下是今日东方财富抓取的真实市场数据，请综合分析后输出结构化 JSON。\n\n"
+        f"真实数据：\n"
+        f"- 今日A股总成交额：{成交额}（昨日：{昨日成交额}）\n"
+        f"- 涨停家数/跌停家数：{涨跌停}\n"
+        f"- 最新融资余额：{融资余额}（较5日前变化：{融资变化}{_pct}，正数表示增加）\n"
+        f"- 主力资金流入行业 Top3：{流入}\n"
+        f"- 主力资金流出行业 Top3：{流出}\n"
+        + (_err_block + "\n" if _err_block else "")
+        + f"\n分析要求：\n"
+        f"1. 对比今日和昨日成交额，判断是放量还是缩量，给出历史分位估算\n"
+        f"2. 结合涨停>跌停还是<跌停，判断市场情绪偏多还是偏空\n"
+        f"3. 融资余额增加通常表示散户加杠杆（做多情绪），减少表示去杠杆\n"
+        f"4. 综合成交额、涨跌停、融资余额变化，给出综合信号\n\n"
+        f"请严格按以下 JSON 格式输出（只输出 JSON，不要其他文字）：\n\n"
+        f"{{\n"
+        f"  \"成交额\": {{\n"
+        f"    \"value\": \"数字亿元\",\n"
+        f"    \"趋势描述\": \"一句话描述今日成交量相对昨日的变化趋势\",\n"
+        f"    \"历史分位\": \"估算当前成交额所处历史分位，如'历史分位约30{_pct}'或'历史分位约80{_pct}'\",\n"
+        f"    \"信号\": \"放量/缩量/持平\"\n"
+        f"  }},\n"
+        f"  \"涨跌停\": {{\n"
+        f"    \"value\": \"涨停数/跌停数\",\n"
+        f"    \"变化描述\": \"一句话描述涨跌停反映的市场情绪\",\n"
+        f"    \"信号\": \"偏多/偏空/中性\"\n"
+        f"  }},\n"
+        f"  \"融资余额\": {{\n"
+        f"    \"value\": \"数字亿元\",\n"
+        f"    \"变化描述\": \"一句话描述融资余额近期变化\",\n"
+        f"    \"信号\": \"做多情绪/去杠杆偏空/中性\"\n"
+        f"  }},\n"
+        f"  \"散户情绪\": {{\n"
+        f"    \"描述\": \"综合涨跌停和融资余额描述散户当前情绪\",\n"
+        f"    \"信号\": \"做多情绪/去杠杆偏空/中性\"\n"
+        f"  }},\n"
+        f"  \"资金流入行业\": [{{\"行业\": \"行业名\", \"净额\": 数字, \"涨跌幅\": 数字}}, ...],\n"
+        f"  \"资金流出行业\": [{{\"行业\": \"行业名\", \"净额\": 数字, \"涨跌幅\": 数字}}, ...],\n"
+        f"  \"综合信号\": \"看多/偏多/中性/偏空/看空\",\n"
+        f'  \"更新时间\": \"{now_str}\"\n'
+        f"}}\n"
+    )
 
     payload = {
         "model": "MiniMax-M2.7",

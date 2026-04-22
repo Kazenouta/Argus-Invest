@@ -60,6 +60,22 @@ def _reason_quality(reason: str) -> str:
     return 'ok'
 
 
+def _to_native(obj):
+    """将 numpy 类型递归转换为 Python 原生类型"""
+    import numpy as np
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_native(x) for x in obj]
+    return obj
+
+
 def analyze_trades(start_date: Optional[date] = None, end_date: Optional[date] = None) -> dict:
     """
     分析调仓记录，返回分析报告。
@@ -204,7 +220,7 @@ def analyze_trades(start_date: Optional[date] = None, end_date: Optional[date] =
 
     return {
         'status': 'ok',
-        'summary': summary,
-        'details': details,
+        'summary': _to_native(summary),
+        'details': _to_native(details),
         'analyzed_at': datetime.now().isoformat(),
     }

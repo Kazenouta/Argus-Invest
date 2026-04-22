@@ -59,9 +59,24 @@ export const useMarketStore = defineStore('market', () => {
   async function loadOverview() {
     loading.value = true
     try {
-      const res = await marketApi.aiOverview()
+      // AI 接口最多等 15 秒，超时则降级到缓存
+      const res = await Promise.race([
+        marketApi.aiOverview(),
+        new Promise<any>((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000)),
+      ])
       aiOverview.value = res.data
       updatedAt.value = res.data?.更新时间 || new Date().toISOString()
+    } catch {
+      // 超时或失败：从缓存读取
+      try {
+        const cache = await marketApi.aiOverviewCache()
+        if (cache.data) {
+          aiOverview.value = cache.data
+          updatedAt.value = cache.data?.更新时间 || null
+        }
+      } catch {
+        // 缓存也失败，静默
+      }
     } finally {
       loading.value = false
     }

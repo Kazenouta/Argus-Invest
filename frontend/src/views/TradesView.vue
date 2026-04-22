@@ -406,11 +406,22 @@ const analysisResult = ref<{
   details: Record<string, unknown>[]
 } | null>(null)
 
+// Page mount: auto-load from cache (instant)
+async function loadAnalysis() {
+  try {
+    const res = await tradesApi.analyze()  // no refresh param -> reads cache
+    analysisResult.value = res.data
+  } catch {
+    // silent fail - first visit with no cache is normal
+  }
+}
+
+// Button click: force recompute and update cache
 async function runAnalysis() {
   analyzing.value = true
   analysisResult.value = null
   try {
-    const res = await tradesApi.analyze()
+    const res = await tradesApi.analyze({ refresh: true })
     analysisResult.value = res.data
   } catch {
     ElMessage.error('分析失败')
@@ -429,7 +440,7 @@ const tickerOptions = computed(() => {
   return Array.from(map.values())
 })
 
-onMounted(loadTrades)
+onMounted(() => { loadTrades(); loadAnalysis() })
 </script>
 
 <style scoped lang="scss">

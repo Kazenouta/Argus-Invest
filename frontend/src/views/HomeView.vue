@@ -176,7 +176,12 @@
           <div class="industry-list">
             <div v-for="(item, i) in marketStore.aiOverview.资金流入行业" :key="i" class="industry-item industry-item--in">
               <span class="industry-rank">{{ i + 1 }}</span>
-              <span class="industry-name">{{ item }}</span>
+              <div class="industry-info">
+                <span class="industry-name">{{ item.行业 }}</span>
+                <span class="industry-pct" :class="item.涨跌幅 >= 0 ? 'up' : 'down'">
+                  {{ item.涨跌幅 >= 0 ? '+' : '' }}{{ item.涨跌幅 }}%
+                </span>
+              </div>
               <span class="industry-arrow">↑</span>
             </div>
           </div>
@@ -193,7 +198,12 @@
           <div class="industry-list">
             <div v-for="(item, i) in marketStore.aiOverview.资金流出行业" :key="i" class="industry-item industry-item--out">
               <span class="industry-rank">{{ i + 1 }}</span>
-              <span class="industry-name">{{ item }}</span>
+              <div class="industry-info">
+                <span class="industry-name">{{ item.行业 }}</span>
+                <span class="industry-pct" :class="item.涨跌幅 >= 0 ? 'up' : 'down'">
+                  {{ item.涨跌幅 >= 0 ? '+' : '' }}{{ item.涨跌幅 }}%
+                </span>
+              </div>
               <span class="industry-arrow">↓</span>
             </div>
           </div>
@@ -341,6 +351,22 @@ onMounted(async () => {
 
   &--in .industry-arrow { color: #e53935; }
   &--out .industry-arrow { color: #43a047; }
+}
+
+.industry-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.industry-pct {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+
+  &.up { color: #e53935; }
+  &.down { color: #43a047; }
 }
 
 .industry-rank {
