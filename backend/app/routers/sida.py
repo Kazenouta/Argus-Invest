@@ -244,6 +244,84 @@ async def upload_sida_report(
     }
 
 
+@router.get("/refresh")
+def refresh_sida_latest():
+    """扫描 KV 目录，如有更新文章则解析并更新 latest.json，返回是否有新文章。"""
+    import datetime
+
+    # 确保目录存在
+    if not KV_SIDA_DIR.exists():
+        return {"hasNew": False, "message": "文章目录不存在", "filename": None, "parsed": None}
+
+    # 找出目录下所有 HTML 文件（按修改时间倒序）
+    html_files = sorted(
+        KV_SIDA_DIR.glob("*.html"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True
+    )
+    if not html_files:
+        return {"hasNew": False, "message": "目录下没有 HTML 文件", "filename": None, "parsed": None}
+
+    latest_html = html_files[0]
+    latest_path = SIDA_DIR / "latest.json"
+
+    # 判断是否需要更新：HTML 文件比 latest.json 更新，或 latest.json 不存在
+    need_update = (
+        not latest_path.exists()
+        or latest_html.stat().st_mtime > latest_path.stat().st_mtime
+    )
+
+    if not need_update:
+        return {
+            "hasNew": False,
+            "message": "已是最新",
+            "filename": latest_html.name,
+            "parsed": None
+        }
+
+    # 解析新文章
+    html_text = latest_html.read_text(encoding='utf-8', errors='replace')
+    parsed = parse_sida_weekly_report(html_text)
+
+    # 读取已有数据（保留 recentHistory）
+    existing = {}
+    if latest_path.exists():
+        try:
+            existing = json.loads(latest_path.read_text(encoding='utf-8'))
+        except Exception:
+            pass
+
+    # 构建合并数据
+    merged = {
+        **existing,
+        **parsed,
+        'name': '斯大',
+        'fullName': '斯托伯的天空',
+        'lastUpdated': datetime.date.today().isoformat(),
+    }
+
+    # 保留 recentHistory，在最前面插入新条目（去重）
+    existing_history = existing.get('recentHistory', [])
+    new_entry = {
+        'date': parsed.get('_meta', {}).get('dateStr', '') or datetime.date.today().isoformat(),
+        'title': parsed.get('_meta', {}).get('sourceFile', latest_html.name),
+        'signal': parsed.get('marketViews', {}).get('原油/能源', {}).get('signal', '中性')
+    }
+    # 去重：移除相同标题的旧条目
+    filtered_history = [h for h in existing_history if h.get('title') != new_entry['title']]
+    merged['recentHistory'] = [new_entry] + filtered_history[:11]
+
+    SIDA_DIR.mkdir(parents=True, exist_ok=True)
+    latest_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    return {
+        "hasNew": True,
+        "message": f"已更新：{latest_html.name}",
+        "filename": latest_html.name,
+        "parsed": parsed
+    }
+
+
 @router.get("/latest")
 def get_sida_latest():
     """获取斯大最新观点数据。"""

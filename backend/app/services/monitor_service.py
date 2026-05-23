@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, date
 from typing import Optional
+
 import math
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
@@ -16,6 +17,121 @@ from app.models.monitor import (
     IndicatorValue, MonitorStatus, MonitorRule
 )
 from app.services.data_storage import DataStorage
+
+
+# ── 信号优先级定义 ─────────────────────────────────────────────────────────────
+#
+# 每条信号映射到 (tier, direction)，tier 越小越紧急，direction 仅作同层内的次级排序
+# direction: -1= bearish/卖出方向(跌), +1= bullish/买入方向(涨)
+# 同 tier 多信号时，保留全部，消息中并列展示，primary 信号按 direction 优选：
+#   tier=1 时 prefer 方向差（跌优先），其他 tier prefer 方向好（涨优先）
+
+SIGNAL_PRIORITY: dict[str, tuple[int, int]] = {
+    # ── Tier 1：极端信号（最紧急，买卖都算同一级）───────────────────────────
+    "强烈卖出警告": (1, -1),   # RSI6 > 80，极度超买
+    "强烈买入机会": (1, +1),   # RSI6 < 20，极度超跌
+    # ── Tier 2：高强度方向信号 ──────────────────────────────────────────────
+    "追高警告":      (2, -1),   # 单日涨幅 > 5%，追高风险（跌优先）
+    "抄底机会":      (2, +1),   # 单日跌幅 > 5%，超跌机会
+    "上轨压力警告":  (2, -1),   # 突破布林带上轨，谨防回调
+    "超跌反弹机会":  (2, +1),   # 跌破布林带下轨，超跌反弹
+    # ── Tier 3：中等趋势信号 ───────────────────────────────────────────────
+    "超买警告":      (3, -1),   # RSI14 > 70
+    "超跌买入机会":  (3, +1),   # RSI6 < 30 / RSI14 < 30
+    "趋势向下":      (3, -1),   # 均线空头排列
+    "趋势向上":      (3, +1),   # 均线多头排列
+    # ── Tier 4：次要关注 ───────────────────────────────────────────────────
+    "成交量异动":    (4,  0),   # 量比 > 3
+    "中轨支撑关注":  (4, +1),   # 回落布林带中轨
+    "下轨关注":      (4, +1),   # 接近布林带下轨
+    "触发":          (9,  0),   # 未分类
+}
+
+
+def _consolidate_signals(events: list[MonitorEvent]) -> MonitorEvent:
+    """
+    对同一只股票的多个信号进行综合判决，返回一个最终 MonitorEvent。
+
+    判决逻辑：
+      1. 按 tier 分组，取最高 tier（数字最小）作为候选层 top_tier。
+      2. 在 top_tier 中：
+         - 若所有信号同向（全是 +1 或全是 -1）→ 同向信号数量越多越紧急；
+         - 若方向混杂 → tier 升半级（按反方向判决，保守）。
+      3. primary_signal：由 tier + 同向共识强度决定，显示综合标签如
+         "[三重超跌买入确认]" 或 "[追高警告 / 超跌买入机会]"（混向时拆开）。
+    """
+    if not events:
+        raise ValueError("No events to consolidate")
+    if len(events) == 1:
+        ev = events[0]
+        ev.message = f"[{ev.signal}] {ev.name}({ev.ticker})：{ev.message}"
+        return ev
+
+    tier_map = SIGNAL_PRIORITY
+    tier = lambda e: tier_map.get(e.signal, (9, 0))[0]
+    direction = lambda e: tier_map.get(e.signal, (9, 0))[1]
+
+    # Step 1: 找最高 tier
+    top_tier = min(tier(e) for e in events)
+    top_events = [e for e in events if tier(e) == top_tier]
+
+    # Step 2: 分析 top_tier 内方向一致性
+    all_dirs = {direction(e) for e in top_events}
+    same_direction = len(all_dirs) == 1 and all_dirs != {0}
+    consensus_dir = all_dirs.pop() if same_direction else None  # +1 或 -1
+
+    # Step 3: 确定 primary signal 和综合标签
+    if same_direction:
+        # 同向信号越多越强
+        count = len(top_events)
+        dir_label = "买入" if consensus_dir == +1 else "卖出"
+        if count >= 3:
+            prefix = f"三重{dir_label}确认"
+        elif count == 2:
+            prefix = f"双重{dir_label}确认"
+        else:
+            prefix = top_events[0].signal  # 不应该单数进这里，但保底
+
+        primary = top_events[0] if consensus_dir == +1 else top_events[0]
+        # 选方向好（涨优先）或方向差（跌优先）作为主信号
+        primary = max(top_events, key=lambda e: direction(e) == consensus_dir)
+        label_parts = [e.signal for e in top_events]
+        label_str = f"[{'/'.join(label_parts)}]"
+        # 消息
+        details = " / ".join(
+            f"{e.signal}({e.threshold_desc}={e.value:.2f})" for e in top_events
+        )
+        primary.message = (
+            f"{label_str} {primary.name}({primary.ticker})："
+            f"{prefix}，{'/'.join(label_parts)}，{details}"
+        )
+    else:
+        # 方向混杂 → 拆开，tier 升半级，按保守方向（-1 优先）
+        label_parts = [e.signal for e in top_events]
+        label_str = f"[{'/'.join(label_parts)}]"
+        # 保守优先：选 direction = -1 作为主信号
+        neg_events = [e for e in top_events if direction(e) == -1]
+        pos_events = [e for e in top_events if direction(e) == +1]
+        if neg_events:
+            primary = max(neg_events, key=lambda e: tier(e))
+        else:
+            primary = max(top_events, key=lambda e: direction(e) == +1)
+
+        # 各自方向的详情
+        neg_details = ", ".join(
+            f"{e.signal}({e.threshold_desc}={e.value:.2f})" for e in neg_events
+        ) if neg_events else ""
+        pos_details = ", ".join(
+            f"{e.signal}({e.threshold_desc}={e.value:.2f})" for e in pos_events
+        ) if pos_events else ""
+        details = "；".join(filter(None, [neg_details, pos_details]))
+        primary.message = (
+            f"{label_str} {primary.name}({primary.ticker})："
+            f"混向信号，谨慎/{primary.signal}，{details}"
+        )
+
+    primary.threshold_desc = " / ".join(e.threshold_desc for e in events)
+    return primary
 
 
 # ── 默认监控规则 ─────────────────────────────────────────────────────────────
@@ -108,6 +224,22 @@ DEFAULT_RULES: list[MonitorRule] = [
         operator=">=",
         threshold=0.97,
         description="股价回落至布林带下轨97%以内，来自上方，下轨附近关注信号"
+    ),
+    MonitorRule(
+        rule_id="MON-R06",
+        name="RSI6 超跌买入提醒",
+        indicator="rsi6",
+        operator="<",
+        threshold=20.0,
+        description="RSI(6) < 20，短期超跌，可关注反弹机会（仅适合 RSI 的个股有效）"
+    ),
+    MonitorRule(
+        rule_id="MON-R16",
+        name="RSI6 超买警告",
+        indicator="rsi6",
+        operator=">",
+        threshold=80.0,
+        description="RSI(6) > 80，短期超买，注意回调风险"
     ),
 ]
 
@@ -415,24 +547,24 @@ def _match_single_rule(iv: IndicatorValue, rule: MonitorRule):
         vals = {a: getattr(iv, a, None) for a in ['ma5', 'ma20', 'ma60']}
         if all(v is not None and math.isfinite(v) for v in vals.values()):
             if vals['ma5'] > vals['ma20'] > vals['ma60']:
-                return True, "买入", 1.0, "5日>20日>60日均线，多头排列"
+                return True, "趋势向上", 1.0, "5日>20日>60日均线，多头排列"
         return False, "", 0, ""
 
     if ind == "ma_bear":
         vals = {a: getattr(iv, a, None) for a in ['ma5', 'ma20', 'ma60']}
         if all(v is not None and math.isfinite(v) for v in vals.values()):
             if vals['ma5'] < vals['ma20'] < vals['ma60']:
-                return True, "卖出", 1.0, "5日<20日<60日均线，空头排列"
+                return True, "趋势向下", 1.0, "5日<20日<60日均线，空头排列"
         return False, "", 0, ""
 
     if ind == "boll_break_upper":
         if iv.boll_upper is not None and math.isfinite(iv.boll_upper) and iv.close > iv.boll_upper:
-            return True, "警告", 1.0, f"突破布林带上轨({iv.boll_upper:.2f})"
+            return True, "上轨压力警告", 1.0, f"突破布林带上轨({iv.boll_upper:.2f})"
         return False, "", 0, ""
 
     if ind == "boll_break_lower":
         if iv.boll_lower is not None and math.isfinite(iv.boll_lower) and iv.close < iv.boll_lower:
-            return True, "关注", 1.0, f"跌破布林带下轨({iv.boll_lower:.2f})"
+            return True, "超跌反弹机会", 1.0, f"跌破布林带下轨({iv.boll_lower:.2f})"
         return False, "", 0, ""
 
     # 布林带中轨接近（股价从上方回落，接近中轨支撑）
@@ -441,7 +573,7 @@ def _match_single_rule(iv: IndicatorValue, rule: MonitorRule):
         if iv.boll_middle is not None and math.isfinite(iv.boll_middle) and iv.boll_middle > 0:
             ratio = iv.close / iv.boll_middle
             if 0.97 <= ratio <= 1.03:  # 在中轨 ±3% 范围内
-                return True, "支撑", ratio, f"接近布林带中轨({iv.boll_middle:.2f})，乖离率{(ratio-1)*100:+.2f}%"
+                return True, "中轨支撑关注", ratio, f"接近布林带中轨({iv.boll_middle:.2f})，乖离率{(ratio-1)*100:+.2f}%"
         return False, "", 0, ""
 
     # 布林带下轨接近（股价从上方回落，接近下轨关注区域）
@@ -450,27 +582,36 @@ def _match_single_rule(iv: IndicatorValue, rule: MonitorRule):
         if iv.boll_lower is not None and math.isfinite(iv.boll_lower) and iv.boll_lower > 0:
             ratio = iv.close / iv.boll_lower
             if 0.97 <= ratio < 1.0:  # 在下轨 97%~100% 区间，未跌破
-                return True, "关注", ratio, f"接近布林带下轨({iv.boll_lower:.2f})，乖离率{(ratio-1)*100:+.2f}%"
+                return True, "下轨关注", ratio, f"接近布林带下轨({iv.boll_lower:.2f})，乖离率{(ratio-1)*100:+.2f}%"
         return False, "", 0, ""
 
     return False, "", 0, ""
 
 
 def _signal_for(indicator: str, value: float, threshold: float) -> str:
-    """根据指标和值返回信号"""
-    if indicator in ('rsi14', 'rsi6'):
+    """根据指标和值返回综合信号（标签需与 CONSOLIDATED_SIGNAL_PRIORITY 的 key 对应）"""
+    if indicator == 'rsi6':
+        if value < 20:
+            return "超跌买入机会"   # 强超卖，可关注反弹（优先10）
+        elif value < 30:
+            return "超跌买入机会"   # 普通超卖，归入同类（优先10）
+        elif value > 80:
+            return "强烈卖出警告"   # 强超买（优先1）
+        return "触发"
+    if indicator == 'rsi14':
         if value < 30:
-            return "买入"
+            return "超跌买入机会"   # RSI14 超卖（优先10）
         elif value > 70:
-            return "警告"
+            return "超买警告"      # RSI14 超买（优先4）
+        return "触发"
     if indicator == 'change_pct':
         if value > 5:
-            return "警告"
+            return "追高警告"
         elif value < -5:
-            return "关注"
+            return "抄底机会"
     if indicator == 'volume_ratio':
         if value > 3:
-            return "异动"
+            return "成交量异动"   # 量比异动（优先7）
     return "触发"
 
 
@@ -527,15 +668,28 @@ def check_portfolio_indicators() -> MonitorCheckResponse:
         events = match_rules([iv], DEFAULT_RULES)
         all_events.extend(events)
 
+    # ── 综合判决：同一只股票多个信号 → 每个股票只保留一个综合信号 ─────
+    from collections import defaultdict
+    by_ticker: dict[str, list[MonitorEvent]] = defaultdict(list)
+    for ev in all_events:
+        by_ticker[ev.ticker].append(ev)
+
+    consolidated_events: list[MonitorEvent] = []
+    for ticker, evs in by_ticker.items():
+        try:
+            consolidated_events.append(_consolidate_signals(evs))
+        except Exception:
+            consolidated_events.extend(evs)  # fallback：保留原始
+
     # 按时间倒序（最新的在前）
-    all_events.sort(key=lambda x: x.triggered_at, reverse=True)
+    consolidated_events.sort(key=lambda x: x.triggered_at, reverse=True)
 
     return MonitorCheckResponse(
         status="ok",
         checked_at=datetime.now(),
         total_positions=len(all_indicators),
-        total_events=len(all_events),
-        events=all_events,
+        total_events=len(consolidated_events),
+        events=consolidated_events,
         indicators=all_indicators,
     )
 

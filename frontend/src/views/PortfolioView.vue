@@ -189,6 +189,7 @@
       </div>
     </el-card>
   </div>
+  <router-view />
 
   <!-- ── 计划弹窗 ─────────────────────────────────────────── -->
   <el-dialog
@@ -276,7 +277,7 @@ import { Upload, Loading, Plus, ArrowRight, Monitor } from '@element-plus/icons-
 import axios from 'axios'
 import { usePortfolioStore } from '@/stores/portfolio'
 import { useMonitorStore } from '@/stores/monitor'
-import { planApi, monitorApi } from '@/api'
+import { planApi, monitorApi, watchlistApi } from '@/api'
 
 const store = usePortfolioStore()
 const monitorStore = useMonitorStore()
@@ -435,6 +436,16 @@ async function checkPositions() {
       checkedAt: new Date().toLocaleString('zh-CN'),
       totalEvents: events.length,
       totalPositions: store.positions.length,
+    }
+    // 同步检查观察池信号
+    try {
+      const sigRes = await watchlistApi.checkSignals()
+      const signals = sigRes.data?.signals ?? []
+      if (signals.length > 0) {
+        ElMessage.warning(`观察池检测到 ${signals.length} 个信号，已写入消息中心`)
+      }
+    } catch (sigErr) {
+      console.warn('[PortfolioView] watchlist check-signals failed:', sigErr)
     }
   } catch (err) {
     console.error('[PortfolioView] checkPositions error:', err)

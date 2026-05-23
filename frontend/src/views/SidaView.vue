@@ -11,6 +11,9 @@
         <el-button size="small" text type="primary" @click="showDetail = !showDetail">
           {{ showDetail ? '收起详情' : '展开详情' }}
         </el-button>
+        <el-button size="small" type="primary" @click="refreshSida" :loading="refreshing">
+          <el-icon><Refresh /></el-icon> 刷新
+        </el-button>
         <el-button size="small" type="primary" @click="showUpload = true">
           <el-icon><Upload /></el-icon> 上传文件
         </el-button>
@@ -22,7 +25,7 @@
       <div class="sida-banner__icon">💡</div>
       <div class="sida-banner__text">
         <div class="sida-banner__quote">"{{ latestView.coreThinking }}"</div>
-        <div class="sida-banner__sub">—— 斯大 · 2026年4月3日</div>
+        <div class="sida-banner__sub">—— 斯大 · 2026年4月24日</div>
       </div>
     </div>
 
@@ -55,7 +58,7 @@
         <span>已清仓：<b>{{ latestView.positionSummary.已清仓 }}</b></span>
       </div>
       <div class="sida-position__return">
-        2025年年度收益：<b>142%</b>｜本年度收益：<b>21%</b>（截至2026-04-03）
+        2025年年度收益：<b>142%</b>｜本年度收益：<b>21%</b>（截至2026-04-24）
       </div>
     </div>
 
@@ -150,79 +153,80 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Upload } from '@element-plus/icons-vue'
+import { Upload, Refresh } from '@element-plus/icons-vue'
 
 const showDetail = ref(false)
 const showUpload = ref(false)
 const uploadRef = ref()
 const uploadFileList = ref<{ name: string; raw?: File }[]>([])
 const uploading = ref(false)
+const refreshing = ref(false)
 
 const latestFileName = computed(() => {
   // 从文件列表中取最新日期的文件名
-  return latestView._meta?.sourceFile || '2026-04-03 周报'
+  return latestView.value._meta?.sourceFile || '2026-04-24 周报'
 })
 
-const latestView = {
+const latestView = ref({
   _meta: {
-    sourceFile: '2026-04-03 周总结——最值钱的就是风险本身'
+    sourceFile: '2026-04-24 周总结——局势并没有变得更好'
   },
-  coreThinking: '风险才是投资里最重要最值钱的东西。长期做交易的投资者逐渐会明白，我们所有的收益都来自于风险本身。',
+  coreThinking: '能源为主，化工、黄金、铜铝均衡持仓，继续持有大比例现金。我认为目前的策略安排能够帮助我有效的度过市场的高度不确定性阶段，并在未来局势明朗后带来理想的结果。',
   marketViews: {
     '大盘': {
-      view: '偏熊市趋势，风险大于机会',
-      detail: '周五成交额跌至1.6万亿，融资余额仍高达2.6万亿。若外部形势无好转，可能回调至3700甚至3600。科技板块泡沫依旧坚硬，整体风险未充分释放。',
+      view: '虹吸效应明显，亏钱效应突出',
+      detail: '除"光"板块外其他板块走得并不好，创业板达3785高位，未来往下跌一点很多人今年收益将归零。量化主导让波动加大，经常砸黄金拉科技，跷跷板效应明显。',
       signal: '偏空',
       level: 3
     },
     '原油/能源': {
-      view: '最高确信度，持续看多',
-      detail: '霍尔木兹再也不会回到战前状态。特朗普讲话后果断加仓旧能源（嗨油、中妹、煤炭ETF）。双方都没有意愿让油价大幅下跌，能源是当前最硬的板块之一。',
-      signal: '强烈看多',
+      view: '继续看多，但需警惕高位冲击',
+      detail: '海峡封锁已接近2个月，原油供应缺口和价格中枢抬升明显。日韩原油短缺已影响民生，保鲜膜等日常用品已开始涨价。美军三艘航母齐聚中东，地面部队随时可能到来，局势明显恶化。',
+      signal: '看多',
       level: 5
     },
     '黄金': {
-      view: '等待，不着急布局',
-      detail: '加息概率增加（原油涨价推动通胀）。黄金上涨逻辑依旧在（货币信用下降），但短期受加息预期压制，需等中美会谈和战争走势明朗。',
+      view: '原油高位压制，耐心等待',
+      detail: '原油持续高位使美元坚韧，直接压制黄金。沃什若上台后进行缩表，就算降息也可能无法让黄金再次启动。需要等待实质性美元信用下降。耐心和认知都很重要。',
       signal: '中性/等待',
       level: 2
     },
     '铜': {
-      view: '谨慎，等待局势明朗',
-      detail: '受战争负面影响比铝大，担忧流动性和衰退，走势远不如铝。等局势明朗再做打算。',
-      signal: '谨慎',
-      level: 2
-    },
-    '电解铝': {
-      view: '长逻辑不变，谨慎持有',
-      detail: '中国电解铝优势非常强大，安全边际自信。等局势明朗再做调整。',
+      view: '逻辑未变，耐心等待',
+      detail: '铜铝观点没有变化，一季报充分验证了逻辑的强大。继续等待局势明朗。',
       signal: '中性',
       level: 3
     },
+    '电解铝': {
+      view: '继续看好，自主可控优势强大',
+      detail: '从924以来因科技AI虹吸效应估值受打压，但市场是否会在未来进行纠偏值得期待。自主可控和难以被替代的资产，逻辑强大。',
+      signal: '中性/乐观',
+      level: 3
+    },
     '化工': {
-      view: '长期逻辑不变，耐心持有',
-      detail: '保供操作对龙头企业中长期有利无害。目前有时间做投研，看年报季报和产业面信息，正好避开高风险阶段。',
+      view: '磷化工格局清晰，长期看好',
+      detail: '虽然受能源危机冲击，但磷化工格局越来越清晰，几个大佬对市场的影响力和议价能力在提升，未来的空间在变大而不是缩小。等待能源危机明确走势。',
       signal: '中性/乐观',
       level: 3
     }
   },
   positionSummary: {
     '整体仓位': '不到6成',
-    '主要持仓': '旧能源（嗨油、中妹煤炭ETF）',
+    '主要持仓': '能源为主，化工、黄金、铜铝均衡持仓',
     '已清仓': '国电',
-    '态度': '防守为主，等待机会'
+    '态度': '防守为主，等待局势明朗'
   },
   recentHistory: [
+    { date: '2026-04-24', title: '局势并没有变得更好', signal: '能源/化工' },
+    { date: '2026-04-17', title: '稳健策略遇上高风偏', signal: '能源/化工' },
     { date: '2026-04-03', title: '最值钱的就是风险本身', signal: '能源/防守' },
     { date: '2026-03-27', title: '全球聚焦这个周末', signal: '能源/谨慎' },
     { date: '2026-03-20', title: '第二次海湾战争？', signal: '能源/军工' },
     { date: '2026-03-13', title: '战争风险外溢', signal: '能源/谨慎' },
     { date: '2026-03-06', title: '战乱年代的净土', signal: '能源' },
-    { date: '2026-02-27', title: '战略稳定期', signal: '铜铝/战略' },
-    { date: '2026-02-13', title: '新年快乐', signal: '铜铝/化工' },
-    { date: '2026-01-30', title: '长期主义', signal: '价值投资/防守' }
+    { date: '2026-02-27', title: '战略稳定期', signal: '铜铝/战略' }
   ]
-}
+})
 
 function assetName(key: string) {
   return key
@@ -269,6 +273,26 @@ async function submitUpload() {
     ElMessage.error((err as Error).message || '上传失败')
   } finally {
     uploading.value = false
+  }
+}
+
+async function refreshSida() {
+  refreshing.value = true
+  try {
+    const res = await fetch('/api/sida/refresh')
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.detail || '刷新失败')
+    if (!data.hasNew) {
+      ElMessage.info(data.message || '已是最新')
+    } else {
+      // 用后端返回的完整数据更新视图
+      latestView.value = { ...data.parsed }
+      ElMessage.success(data.message || '已刷新')
+    }
+  } catch (err: unknown) {
+    ElMessage.error((err as Error).message || '刷新失败')
+  } finally {
+    refreshing.value = false
   }
 }
 

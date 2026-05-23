@@ -356,8 +356,9 @@ onMounted(async () => {
 .industry-info {
   flex: 1;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .industry-pct {

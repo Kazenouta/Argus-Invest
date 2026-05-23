@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     THINKING_FILE: str = "thinking.parquet"
     PLAN_FILE: str = "portfolio_plan.parquet"
     MONITOR_FILE: str = "monitor_check.parquet"
+    WATCHLIST_FILE: str = "watchlist.parquet"
+    WATCHLIST_CHECK_FILE: str = "watchlist_check.parquet"
+    MESSAGE_FILE: str = "messages.parquet"
 
     # AI settings
     AI_MODEL: str = "minimax/MiniMax-M2.7"  # default model

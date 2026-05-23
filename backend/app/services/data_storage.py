@@ -85,8 +85,21 @@ class DataStorage:
 
         直接用 pandas.to_parquet()（底层 pyarrow）写入，
         避免通过 DuckDB 单例连接操作文件导致后台线程崩溃。
+
+        兼容 parquet 读回时 Timestamp 列被 pandas 保留为 object 的情况，
+        统一转为 datetime64[ns] 再写入，防止 pyarrow ArrowTypeError。
         """
-        # pandas/pyarrow 写入，不走 DuckDB 连接
+        # 深拷贝避免修改原始 DataFrame
+        df = df.copy()
+        for col in df.columns:
+            if df[col].dtype == object:
+                # 检查该列是否存在 datetime-like 值（非仅第一个），
+                # 防止 concat 导致的字符串+Timestamp 混合类型
+                vals = df[col].dropna()
+                if len(vals) > 0:
+                    has_dt = vals.apply(lambda v: hasattr(v, 'date') and hasattr(v, 'timestamp')).any()
+                    if has_dt:
+                        df[col] = pd.to_datetime(df[col], errors='coerce')
         df.to_parquet(path, index=False)
         # 确保落盘
         path.stat()
@@ -216,6 +229,44 @@ class DataStorage:
             return
         df = df[df["id"] != plan_id]
         cls.write_parquet(cls.plans_path(), df)
+
+    # ── Watchlist Check Results ─────────────────────────────────────────────
+
+    @classmethod
+    def watchlist_check_path(cls) -> Path:
+        return cls._parquet_path(settings.USER_DIR, settings.WATCHLIST_CHECK_FILE)
+
+    @classmethod
+    def save_watchlist_check(
+        cls,
+        checked_at: str,
+        total_watchlist: int,
+        signals_data: list,
+        messages_created: int,
+    ) -> None:
+        import json
+        df = pd.DataFrame([{
+            'checked_at': checked_at,
+            'total_watchlist': total_watchlist,
+            'signals': json.dumps(signals_data, default=str),
+            'messages_created': messages_created,
+        }])
+        cls.write_parquet(cls.watchlist_check_path(), df)
+
+    @classmethod
+    def read_watchlist_check(cls) -> Optional[dict]:
+        """读取最近一次观察池检查结果，不存在返回 None"""
+        import json
+        df = cls.read_parquet(cls.watchlist_check_path())
+        if df.empty:
+            return None
+        row = df.iloc[-1]
+        return {
+            'checked_at': row['checked_at'],
+            'total_watchlist': int(row['total_watchlist']),
+            'signals': json.loads(row['signals']),
+            'messages_created': int(row['messages_created']),
+        }
 
     # ── Monitor Check Results ─────────────────────────────────────────────
 
@@ -406,3 +457,112 @@ class DataStorage:
         path = cls.analysis_cache_path()
         if path.exists():
             path.unlink()
+
+    # ── Watchlist ─────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def watchlist_path(cls) -> Path:
+        return cls._parquet_path(settings.USER_DIR, settings.WATCHLIST_FILE)
+
+    @classmethod
+    def read_watchlist(cls) -> pd.DataFrame:
+        """读取观察池数据"""
+        return cls.read_parquet(cls.watchlist_path())
+
+    @classmethod
+    def write_watchlist(cls, df: pd.DataFrame) -> None:
+        """写入观察池数据（覆盖）"""
+        cls.write_parquet(cls.watchlist_path(), df)
+
+    @classmethod
+    def append_watchlist(cls, record: dict) -> int:
+        """追加一条观察股票，返回自动生成的ID"""
+        df = cls.read_watchlist()
+        new_id = (int(df["id"].max()) if not df.empty and "id" in df.columns and len(df) > 0 else 0) + 1
+        record_with_id = {**record, "id": new_id}
+        new_df = pd.DataFrame([record_with_id])
+        cls.append_parquet(cls.watchlist_path(), new_df)
+        return int(new_id)
+
+    @classmethod
+    def update_watchlist(cls, record_id: int, patch: dict) -> bool:
+        """更新指定记录的部分字段，返回是否成功"""
+        df = cls.read_watchlist()
+        if df.empty or "id" not in df.columns or record_id not in df["id"].values:
+            return False
+        for key, val in patch.items():
+            if key in df.columns:
+                df.loc[df["id"] == record_id, key] = val
+        cls.write_parquet(cls.watchlist_path(), df)
+        return True
+
+    @classmethod
+    def delete_watchlist(cls, record_id: int) -> None:
+        """删除指定观察股票"""
+        df = cls.read_watchlist()
+        if df.empty or "id" not in df.columns or record_id not in df["id"].values:
+            return
+        df = df[df["id"] != record_id]
+        cls.write_parquet(cls.watchlist_path(), df)
+
+    # ── Messages ──────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def messages_path(cls) -> Path:
+        return cls._parquet_path(settings.USER_DIR, settings.MESSAGE_FILE)
+
+    @classmethod
+    def read_messages(cls, limit: int = 100) -> pd.DataFrame:
+        """读取消息列表（按时间倒序）"""
+        df = cls.read_parquet(cls.messages_path())
+        if df.empty:
+            return df
+        if "created_at" in df.columns:
+            df = df.sort_values("created_at", ascending=False)
+        return df.head(limit).reset_index(drop=True)
+
+    @classmethod
+    def append_message(cls, record: dict) -> int:
+        """追加一条消息，返回自动生成的ID"""
+        df = cls.read_messages(limit=10000)
+        new_id = (int(df["id"].max()) if not df.empty and "id" in df.columns and len(df) > 0 else 0) + 1
+        record_with_id = {**record, "id": new_id}
+        new_df = pd.DataFrame([record_with_id])
+        cls.append_parquet(cls.messages_path(), new_df)
+
+        # 裁剪：只保留最新 20 条
+        all_df = cls.read_messages(limit=10000)
+        if len(all_df) > 20:
+            all_df = all_df.head(20).reset_index(drop=True)
+            cls.write_parquet(cls.messages_path(), all_df)
+
+        return int(new_id)
+
+    @classmethod
+    def mark_message_read(cls, message_id: int) -> bool:
+        """标记单条消息为已读"""
+        df = cls.read_messages(limit=10000)
+        if df.empty or "id" not in df.columns or message_id not in df["id"].values:
+            return False
+        df.loc[df["id"] == message_id, "is_read"] = True
+        cls.write_parquet(cls.messages_path(), df)
+        return True
+
+    @classmethod
+    def mark_all_messages_read(cls) -> int:
+        """标记全部消息为已读，返回已更新的数量"""
+        df = cls.read_messages(limit=10000)
+        if df.empty or "is_read" not in df.columns:
+            return 0
+        updated = int((~df["is_read"]).sum())
+        df["is_read"] = True
+        cls.write_parquet(cls.messages_path(), df)
+        return updated
+
+    @classmethod
+    def unread_count(cls) -> int:
+        """获取未读消息数量"""
+        df = cls.read_messages(limit=10000)
+        if df.empty or "is_read" not in df.columns:
+            return 0
+        return int((~df["is_read"]).sum())

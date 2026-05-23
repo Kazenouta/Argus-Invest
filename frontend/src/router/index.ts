@@ -14,8 +14,19 @@ const router = createRouter({
         },
         {
           path: '/portfolio',
-          name: 'portfolio',
-          component: () => import('@/views/PortfolioView.vue'),
+          component: () => import('@/views/PortfolioRouter.vue'),
+          children: [
+            {
+              path: '',
+              name: 'portfolio-main',
+              component: () => import('@/views/PortfolioView.vue'),
+            },
+            {
+              path: 'watchlist',
+              name: 'portfolio-watchlist',
+              component: () => import('@/views/WatchlistView.vue'),
+            },
+          ],
         },
         {
           path: '/trades',
@@ -36,6 +47,28 @@ const router = createRouter({
           path: '/rules',
           name: 'rules',
           component: () => import('@/views/RulesView.vue'),
+        },
+        {
+          path: '/persona',
+          name: 'persona',
+          component: () => import('@/views/PersonaView.vue'),
+        },
+        {
+          path: '/quant',
+          name: 'quant',
+          component: () => import('@/views/QuantView.vue'),
+        },
+        {
+          path: '/kv',
+          name: 'kv',
+          component: () => import('@/views/KvRouter.vue'),
+          children: [
+            {
+              path: 'guolei',
+              name: 'kv-guolei',
+              component: () => import('@/views/KvGuoleiView.vue'),
+            },
+          ],
         },
       ],
     },
