@@ -14,23 +14,19 @@ from typing import Any, Optional
 import httpx
 
 from app.config import settings
+from app.utils import get_minimax_key
 
 
 # ── MiniMax M2.7 配置 ───────────────────────────────────────────────────────
 
-_MINIMAX_KEY: Optional[str] = None
-_BASE_URL = "https://api.minimaxi.com/anthropic"
+_BASE_URL = settings.AI_API_BASE
 _MAX_RETRIES = 10
+_AI_MODEL = settings.AI_MODEL
 
 
 def _get_minimax_key() -> str:
-    global _MINIMAX_KEY
-    if _MINIMAX_KEY:
-        return _MINIMAX_KEY
-    key = os.environ.get("MINIMAX_API_KEY", "").strip() or settings.MINIMAX_API_KEY.strip()
-    if key:
-        _MINIMAX_KEY = key
-    return _MINIMAX_KEY or ""
+    """兼容旧调用：复用 utils.get_minimax_key"""
+    return get_minimax_key()
 
 
 # ── Step 1：AkShare 抓取真实数据 ────────────────────────────────────────────
@@ -249,7 +245,7 @@ async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, An
     )
 
     payload = {
-        "model": "MiniMax-M2.7",
+        "model": _AI_MODEL,
         "messages": [{"role": "user", "content": user_prompt}],
         "max_tokens": 2000,
         "temperature": 0.3,
