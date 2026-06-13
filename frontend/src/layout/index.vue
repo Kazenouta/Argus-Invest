@@ -56,10 +56,6 @@
             <el-menu-item index="/kv/guolei">郭磊宏观</el-menu-item>
           </el-sub-menu>
 
-          <el-menu-item index="/persona">
-            <el-icon><User /></el-icon>
-            <span>思维顾问</span>
-          </el-menu-item>
         </el-menu>
       </el-aside>
 
@@ -123,7 +119,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import { Briefcase, User, DArrowLeft, DArrowRight, Bell, Reading } from '@element-plus/icons-vue'
+import { Briefcase, DArrowLeft, DArrowRight, Bell, Reading } from '@element-plus/icons-vue'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { storeToRefs } from 'pinia'
@@ -154,7 +150,6 @@ const pageTitleMap: Record<string, string> = {
   '/rules': '规则库',
   '/kv': '大V观点',
   '/kv/guolei': '郭磊宏观',
-  '/persona': '思维顾问',
 }
 
 const pageTitle = computed(() => pageTitleMap[route.path] || 'Argus-Invest')

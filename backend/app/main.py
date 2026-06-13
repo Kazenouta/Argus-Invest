@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.routers import portfolio, trades, weakness, rules, thinking, portfolio_plan, monitor, market_overview, sida, persona, watchlist, messages, daily_bar, kv
+from app.routers import portfolio, trades, weakness, rules, thinking, portfolio_plan, monitor, market_overview, sida, watchlist, messages, daily_bar, kv
 
 
 @asynccontextmanager
@@ -52,7 +52,6 @@ app.include_router(portfolio_plan.router)
 app.include_router(monitor.router)
 app.include_router(market_overview.router)
 app.include_router(sida.router)
-app.include_router(persona.router)
 app.include_router(watchlist.router)
 app.include_router(messages.router)
 app.include_router(daily_bar.router)

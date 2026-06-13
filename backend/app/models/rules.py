@@ -111,14 +111,6 @@ class RuleLibrary(BaseModel):
                     risk_level="critical"
                 ),
                 RuleBase(
-                    rule_id="TRD-003",
-                    category="trading_behavior",
-                    title="禁止东睦/中矿尾盘交易",
-                    description="东睦股份、中矿资源在收盘前30分钟内禁止新建仓位（这两只上瘾最严重）",
-                    params={"restricted_stocks": ["东睦股份", "中矿资源"], "restricted_time_minutes_before_close": 30},
-                    risk_level="high"
-                ),
-                RuleBase(
                     rule_id="TRD-004",
                     category="trading_behavior",
                     title="卖出后悔禁止",
@@ -301,6 +293,98 @@ class RuleLibrary(BaseModel):
                     description="RSI/MACD形成顶背离，趋势逆转信号",
                     params={"indicators": ["RSI", "MACD"]},
                     risk_level="medium"
+                ),
+                RuleBase(
+                    rule_id="TOP-004",
+                    category="top_signal",
+                    title="主升浪日内暴跌拉回",
+                    description="一段主升浪后出现日内暴跌（-5%以上）然后拉回的走势，是典型的主力出货信号。暴跌清洗追高盘，拉回诱多接盘。触发后进入高度警惕模式。",
+                    params={"intraday_drop_threshold": -5.0, "requires_uptrend": True, "trigger_action": "alert"},
+                    risk_level="critical"
+                ),
+
+                # ═══════════════════════════════════════════════
+                # 见底信号规则
+                # ═══════════════════════════════════════════════
+                RuleBase(
+                    rule_id="BTM-001",
+                    category="bottom_signal",
+                    title="市场估值历史低位",
+                    description="整体市场PE/PB处于历史低位区间，是中长期底部的重要信号。低估值意味着市场已经充分定价了悲观预期。",
+                    params={"indicator": "PE/PB", "threshold": "历史低位"},
+                    risk_level="high"
+                ),
+                RuleBase(
+                    rule_id="BTM-002",
+                    category="bottom_signal",
+                    title="M1见底回升",
+                    description="M1货币供应增速止跌回升，表明企业活期存款增加，实体经济活跃度回暖，是领先的宏观见底信号。",
+                    params={"indicator": "M1增速"},
+                    risk_level="high"
+                ),
+                RuleBase(
+                    rule_id="BTM-003",
+                    category="bottom_signal",
+                    title="降准或降息",
+                    description="央行降准或降息释放流动性，降低资金成本，是政策底的重要标志，通常领先市场底1-3个月。",
+                    params={"policy_type": "降准/降息"},
+                    risk_level="high"
+                ),
+                RuleBase(
+                    rule_id="BTM-004",
+                    category="bottom_signal",
+                    title="成交量极度萎缩",
+                    description="市场成交量萎缩至地量水平（如高峰期的30%以下），表明抛压衰竭，是典型的底部量价信号。",
+                    params={"volume_ratio": 0.3, "indicator": "成交量"},
+                    risk_level="medium"
+                ),
+                RuleBase(
+                    rule_id="BTM-005",
+                    category="bottom_signal",
+                    title="社保/汇金入市",
+                    description="社保基金、汇金公司等国家队资金入市，代表政策意志，历史上多次精准抄底。",
+                    params={"actor": "社保/汇金"},
+                    risk_level="high"
+                ),
+                RuleBase(
+                    rule_id="BTM-006",
+                    category="bottom_signal",
+                    title="大股东/高管增持",
+                    description="大股东和高级管理人员大规模增持自家股票，表明内部人对公司价值的认可，是重要的信心指标。",
+                    params={"actor": "大股东/高管", "signal_type": "增持"},
+                    risk_level="medium"
+                ),
+                RuleBase(
+                    rule_id="BTM-007",
+                    category="bottom_signal",
+                    title="机构超配非周期类股票",
+                    description="机构投资者大幅超配防御性非周期类股票（消费、医药等），表明风险偏好极度收缩，往往对应底部区域。",
+                    params={"sector": "非周期类", "indicator": "机构超配"},
+                    risk_level="medium"
+                ),
+                RuleBase(
+                    rule_id="BTM-008",
+                    category="bottom_signal",
+                    title="强周期股抗跌领涨",
+                    description="强周期类股票在下跌中表现抗跌，反弹时率先领涨，是市场情绪从恐慌转向理性的重要信号。",
+                    params={"sector": "强周期", "pattern": "跌时抗跌，涨时领涨"},
+                    risk_level="medium"
+                ),
+                RuleBase(
+                    rule_id="BTM-009",
+                    category="bottom_signal",
+                    title="机构仓位历史低点",
+                    description="机构整体仓位处于历史低位，意味着后续加仓空间充足，是资金面见底的信号。",
+                    params={"indicator": "机构仓位", "threshold": "历史低位"},
+                    risk_level="high"
+                ),
+                RuleBase(
+                    rule_id="BTM-010",
+                    category="bottom_signal",
+                    title="新股停发或降印花税",
+                    description="监管层暂停新股发行或降低印花税，是明确的政策护盘信号，历史上多次成为市场底的重要催化。",
+                    params={"policy_type": "停发新股/降印花税"},
+                    risk_level="high"
                 ),
 
                 # ═══════════════════════════════════════════════

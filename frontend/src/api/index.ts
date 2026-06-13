@@ -94,15 +94,6 @@ export const thinkingApi = {
     api.delete(`/thinking/${thinkingId}`),
 }
 
-// ── Persona ─────────────────────────────────────────────────────────────────
-
-export const personaApi = {
-  list: () => api.get('/persona/'),
-  get: (skillId: string) => api.get(`/persona/${skillId}`),
-  chat: (payload: { skill_id: string; messages: Array<{ role: string; content: string }> }) =>
-    api.post('/persona/chat', payload),
-}
-
 // ── Health ───────────────────────────────────────────────────────────────────
 
 export const healthApi = {
@@ -137,33 +128,6 @@ export const watchlistApi = {
   delete: (id: number) => api.delete(`/watchlist/${id}`),
   checkSignals: () => api.post('/watchlist/check-signals'),
   getLastCheck: () => api.get('/watchlist/check-signals/last'),
-}
-
-// ── Quant ────────────────────────────────────────────────────────────────────
-
-export const quantAPI = {
-  getStrategies: () => api.get('/quant/strategies'),
-
-  runBacktest: (params: Record<string, unknown>) =>
-    api.post('/quant/backtest', params),
-
-  getBacktest: (id: number) => api.get(`/quant/backtest/${id}`),
-
-  getBacktestTrades: (id: number) => api.get(`/quant/backtest/${id}/trades`),
-
-  deleteBacktest: (id: number) => api.delete(`/quant/backtest/${id}`),
-
-  runOptimize: (params: Record<string, unknown>) =>
-    api.post('/quant/optimize', params),
-
-  optimizePortfolio: (params: Record<string, unknown>) =>
-    api.post('/quant/portfolio/optimize', params),
-
-  getSignals: (params?: { ticker?: string; strategy_name?: string }) =>
-    api.get('/quant/signals', { params }),
-
-  getFactors: (ticker: string, factorNames?: string[]) =>
-    api.get('/quant/factors', { params: { ticker, factor_names: factorNames?.join(',') } }),
 }
 
 // ── KV / 大V观点 ─────────────────────────────────────────────────────────────

@@ -49,16 +49,6 @@ const router = createRouter({
           component: () => import('@/views/RulesView.vue'),
         },
         {
-          path: '/persona',
-          name: 'persona',
-          component: () => import('@/views/PersonaView.vue'),
-        },
-        {
-          path: '/quant',
-          name: 'quant',
-          component: () => import('@/views/QuantView.vue'),
-        },
-        {
           path: '/kv',
           name: 'kv',
           component: () => import('@/views/KvRouter.vue'),

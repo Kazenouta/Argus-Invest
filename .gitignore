@@ -1,4 +1,8 @@
+backend/logs/
 data/tmp/*
 data/user/*
 docs/成交记录
 docs/投资书籍
+data/kv/*
+data/market/*
+tmp/*
