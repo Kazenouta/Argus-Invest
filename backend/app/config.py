@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     MESSAGE_FILE: str = "messages.parquet"
 
     # AI settings
-    AI_MODEL: str = "MiniMax-M2.7"  # default model
+    AI_MODEL: str = "MiniMax-M3"  # default model
     AI_API_BASE: str = "https://api.minimaxi.com/anthropic"
 
     # MiniMax API key

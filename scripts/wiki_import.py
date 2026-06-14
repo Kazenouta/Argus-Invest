@@ -26,7 +26,7 @@ from pathlib import Path
 import pymupdf
 from openai import OpenAI
 
-MODEL = "MiniMax-M2.7"
+MODEL = "MiniMax-M3"
 API_BASE = "https://api.minimaxi.com/v1"
 PROGRESS_FILE = Path("/tmp/wiki_import_progress.json")
 STANCE_EMOJI = {"看多": "✅看多", "看空": "❌看空", "谨慎": "⚠️谨慎", "中性": "➡️中性"}

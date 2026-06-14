@@ -121,7 +121,7 @@ def _parse_date_from_body(body_text: str) -> str:
 
 async def _ai_analyze_pdf(title: str, body_text: str) -> dict[str, Any]:
     """
-    用 MiniMax M2.7 对 PDF 正文进行深度分析，
+    用 MiniMax M3 对 PDF 正文进行深度分析，
     提炼结构化字段，包括关键经济指标。
     """
     api_key = _get_minimax_key()
@@ -172,7 +172,7 @@ async def _ai_analyze_pdf(title: str, body_text: str) -> dict[str, Any]:
             )
 
         if resp.status_code != 200:
-            return _empty_analysis(f"M2.7 API 返回 {resp.status_code}: {resp.text[:100]}")
+            return _empty_analysis(f"M3 API 返回 {resp.status_code}: {resp.text[:100]}")
 
         result_data = resp.json()
         content_list = result_data.get("content", [])

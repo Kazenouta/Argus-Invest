@@ -1,7 +1,7 @@
 """
 Market AI overview service.
 
-方案：AkShare 抓取真实数据 → MiniMax M2.7 合成结构化 JSON
+方案：AkShare 抓取真实数据 → MiniMax M3 合成结构化 JSON
 （系统错误时自动重试，最多重试 10 次）
 """
 import os
@@ -17,7 +17,7 @@ from app.config import settings
 from app.utils import get_minimax_key
 
 
-# ── MiniMax M2.7 配置 ───────────────────────────────────────────────────────
+# ── MiniMax M3 配置 ─────────────────────────────────────────────────────────
 
 _BASE_URL = settings.AI_API_BASE
 _MAX_RETRIES = 10
@@ -178,7 +178,7 @@ def fetch_market_data() -> dict[str, Any]:
     return result
 
 
-# ── Step 2：M2.7 合成（带重试）─────────────────────────────────────────────
+# ── Step 2：M3 合成（带重试）────────────────────────────────────────────────
 
 async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, Any]:
     api_key = _get_minimax_key()
@@ -266,7 +266,7 @@ async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, An
                 )
 
             if resp.status_code != 200:
-                last_error = f"M2.7 API 返回 {resp.status_code}: {resp.text[:300]}"
+                last_error = f"M3 API 返回 {resp.status_code}: {resp.text[:300]}"
                 # 1033/500/502/503/529 等系统错误，重试
                 if resp.status_code in (500, 502, 503, 529) or "1033" in resp.text or "overloaded" in resp.text:
                     await asyncio.sleep(5 * attempt)  # 递增等待
@@ -286,7 +286,7 @@ async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, An
             if parsed:
                 parsed["更新时间"] = now_str
                 return parsed
-            last_error = f"M2.7 返回格式解析失败：{raw_text[:300]}"
+            last_error = f"M3 返回格式解析失败：{raw_text[:300]}"
             # 格式解析失败不重试，直接返回错误
             return _error_result(last_error)
 
@@ -298,7 +298,7 @@ async def _call_m2_synthesize(raw: dict[str, Any], now_str: str) -> dict[str, An
             return _error_result(last_error)
 
     # 所有重试均失败
-    return _error_result(f"M2.7 服务不可用（已重试{_MAX_RETRIES}次）：{last_error}")
+    return _error_result(f"M3 服务不可用（已重试{_MAX_RETRIES}次）：{last_error}")
 
 
 def _parse_json(text: str) -> Optional[dict[str, Any]]:
