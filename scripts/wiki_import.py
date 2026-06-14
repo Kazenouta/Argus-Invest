@@ -91,7 +91,7 @@ def write_wiki(out_path: Path, source_name: str, data: dict, author: str | None)
         "type": data.get("type", "周总结"),
         "stance": stance,
         "tags": data.get("tags", []),
-        "sources": [author] if author else ["斯托伯的天空"],
+        "sources": [author] if author else ["未知"],
         "confidence": "high",
         "contested": "false",
     }
@@ -118,6 +118,9 @@ def main() -> int:
     if "MINIMAX_API_KEY" not in os.environ and not args.dry_run:
         print("ERROR: MINIMAX_API_KEY 未设置", file=sys.stderr)
         return 1
+
+    # author 缺省时从 input_dir 推断（取最后一级目录名）
+    author = args.author or args.input_dir.name
 
     config: dict = {}
     if args.config:
@@ -161,7 +164,8 @@ def main() -> int:
         cfg = config.get(f.name, {})
         if "type" in cfg:
             result["type"] = cfg["type"]
-        author = cfg.get("author", args.author)
+        # cfg.get("author") 优先；其次用 main 顶部推断的 author（args.author or input_dir.name）
+        author = cfg.get("author") or author
 
         out_path = args.output_dir / f"{f.stem}.md"
         write_wiki(out_path, f.name, result, author=author)
