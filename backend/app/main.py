@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.routers import portfolio, trades, weakness, rules, thinking, portfolio_plan, monitor, market_overview, sida, watchlist, messages, daily_bar, kv
+from app.routers import portfolio, trades, weakness, rules, thinking, portfolio_plan, monitor, market_overview, sida, watchlist, messages, daily_bar, kv, search
 
 
 @asynccontextmanager
@@ -56,6 +56,7 @@ app.include_router(watchlist.router)
 app.include_router(messages.router)
 app.include_router(daily_bar.router)
 app.include_router(kv.router)
+app.include_router(search.router)
 
 
 @app.get("/api/health")

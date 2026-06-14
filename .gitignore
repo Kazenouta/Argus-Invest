@@ -6,5 +6,7 @@ docs/成交记录
 docs/投资书籍
 data/kv/*
 data/market/*
+data/search.sqlite
+data/search.sqlite-*
 tmp/*
 .venv/
