@@ -40,6 +40,36 @@ def extract_html(path: Path) -> str | None:
     return html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(1)))).strip()
 
 
+def extract_html_clean(path: Path) -> str | None:
+    """
+    激进的公众号研报清洗：只保留 <p> 和 <h1-6> 的文本。
+    适用：含大量嵌入式图片/script/dialog 的"长"公众号文章（5MB+）。
+    对比 extract_html()：从 js_content 全量剥标签 → 仅取段落/标题。
+    压缩比通常 95%+，token 节省 10-20x。
+    """
+    content = path.read_text(encoding="utf-8", errors="ignore")
+    m = re.search(r'id="js_content"[^>]*>(.*)', content, re.DOTALL)
+    if not m:
+        return None
+    js_content = m.group(1)
+    # 1. 删 <script> / <style> 整块
+    cleaned = re.sub(r"<(script|style)[^>]*>.*?</\1>", "",
+                     js_content, flags=re.DOTALL | re.IGNORECASE)
+    # 2. 只取 <p> 和 <h1-6> 的内容
+    parts = re.findall(r"<(p|h[1-6])[^>]*>(.*?)</\1>",
+                       cleaned, flags=re.DOTALL | re.IGNORECASE)
+    texts = []
+    for tag, inner in parts:
+        text = re.sub(r"<[^>]+>", "", inner)
+        text = html.unescape(text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            # 标题前加换行便于阅读
+            prefix = "\n\n" if tag.startswith("h") else ""
+            texts.append(prefix + text)
+    return "\n".join(texts).strip() or None
+
+
 def extract_pdf(path: Path) -> str:
     doc = pymupdf.open(path)
     full = "".join(p.get_text() for p in doc)
@@ -50,6 +80,7 @@ def extract_pdf(path: Path) -> str:
 
 
 EXTRACTORS = {".html": extract_html, ".pdf": extract_pdf}
+EXTRACTORS_CLEAN = {".html": extract_html_clean, ".pdf": extract_pdf}
 
 PROMPT = """请为以下文章生成结构化摘要。严格输出 JSON（不要 markdown 包裹），字段：
   summary: 100-200 字摘要
@@ -70,9 +101,20 @@ def call_llm(text: str) -> dict | None:
         temperature=0.3,
     )
     content = r.choices[0].message.content
+    # 1. 去掉 <think>...</think> 思考块
     content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+    # 2. 去掉 markdown code fence（防止 LLM 包了 ```json ... ```）
+    content = re.sub(r"^```(?:json)?\s*", "", content.strip())
+    content = re.sub(r"\s*```$", "", content.strip())
     m = re.search(r"\{[\s\S]*\}", content)
-    return json.loads(m.group()) if m else None
+    if not m:
+        print(f"  [LLM 无 JSON] 原始返回前 200 字符: {content[:200]!r}")
+        return None
+    try:
+        return json.loads(m.group())
+    except json.JSONDecodeError as e:
+        print(f"  [JSON 解析失败] {e}; 原始: {m.group()[:200]!r}")
+        return None
 
 
 def date_from_filename(name: str) -> str | None:
@@ -112,6 +154,8 @@ def main() -> int:
     ap.add_argument("output_dir", type=Path, help="wiki 输出目录")
     ap.add_argument("--author", help="作者名（写入 frontmatter sources）")
     ap.add_argument("--config", type=Path, help="可选 JSON 配置，按文件名覆盖 author/type/created")
+    ap.add_argument("--html-mode", choices=["simple", "clean"], default="simple",
+                    help="HTML 提取模式：simple=剥 js_content 全量标签（默认）；clean=只保留 <p>/<h*> 段落（更激进，5MB+ 长文节省 95% token）")
     ap.add_argument("--dry-run", action="store_true", help="只读 + 解析，不调 LLM")
     args = ap.parse_args()
 
@@ -135,6 +179,11 @@ def main() -> int:
         print(f"ERROR: {args.input_dir} 下没有 .html 或 .pdf", file=sys.stderr)
         return 1
 
+    # --html-mode clean 用 extract_html_clean（更激进、节省 token）
+    extractors = EXTRACTORS_CLEAN if args.html_mode == "clean" else EXTRACTORS
+    if args.html_mode == "clean":
+        print(f"[html-mode=clean] 激进清洗：只保留 <p>/<h*> 段落")
+
     args.output_dir.mkdir(parents=True, exist_ok=True)
     success = failed = 0
 
@@ -144,7 +193,7 @@ def main() -> int:
             continue
         print(f"[{i}/{len(files)}] {f.name}")
 
-        text = EXTRACTORS[f.suffix.lower()](f)
+        text = extractors[f.suffix.lower()](f)
         if not text:
             print("  无文本，跳过")
             failed += 1
